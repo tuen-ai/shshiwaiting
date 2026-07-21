@@ -2,40 +2,92 @@
 <html lang="zh-HK">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0908">
   <title>壽司郎排隊追蹤器 🍣</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍣</text></svg>">
 </head>
 <body>
+  <div class="glow glow-a" aria-hidden="true"></div>
+  <div class="glow glow-b" aria-hidden="true"></div>
+  <div class="grain" aria-hidden="true"></div>
+
   <header class="topbar">
-    <div class="topbar-inner">
-      <h1>🍣 壽司郎排隊追蹤器</h1>
-      <button id="refreshBtn" class="refresh-btn" title="即刻更新">⟳</button>
-    </div>
-    <div class="meta-row">
-      <span id="updatedAt">載入中…</span>
-      <span id="demoBadge" class="demo-badge hidden">示範數據</span>
+    <div class="topbar-island">
+      <span class="logo">🍣</span>
+      <div class="title-block">
+        <h1>壽司郎排隊追蹤</h1>
+        <span id="updatedAt" class="updated">載入中…</span>
+      </div>
+      <span id="demoBadge" class="demo-badge hidden">示範</span>
+      <button id="refreshBtn" class="icon-btn" title="即刻更新" aria-label="即刻更新">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4"/></svg>
+      </button>
     </div>
   </header>
 
+  <section class="hero">
+    <p class="eyebrow">SUSHIRO HONG KONG · LIVE QUEUE</p>
+    <h2 class="hero-title">而家<em>邊間</em>最快有位?</h2>
+    <div id="summaryChips" class="summary-chips"></div>
+  </section>
+
   <div class="controls">
-    <input id="searchBox" type="search" placeholder="搜尋分店 / 地址…" autocomplete="off">
-    <select id="areaFilter">
-      <option value="">全部地區</option>
-    </select>
-    <select id="sortBy">
-      <option value="wait-asc">等候 少 → 多</option>
-      <option value="wait-desc">等候 多 → 少</option>
-      <option value="name">按名稱</option>
-    </select>
+    <div class="field search-field">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="searchBox" type="search" placeholder="搜尋分店 / 地址…" autocomplete="off">
+    </div>
+    <div class="field">
+      <select id="areaFilter"><option value="">全部地區</option></select>
+    </div>
+    <div class="field">
+      <select id="sortBy">
+        <option value="wait-asc">等候 少 → 多</option>
+        <option value="wait-desc">等候 多 → 少</option>
+        <option value="name">按名稱</option>
+      </select>
+    </div>
   </div>
 
   <main id="storeList" class="store-list" aria-live="polite"></main>
 
   <footer class="footer">
-    <p>數據來自壽司郎 SushiPass API,每分鐘自動更新。非官方網站,僅供參考。</p>
+    <p>數據來自壽司郎 SushiPass API,每分鐘自動更新。<br>非官方網站,與壽司郎無關,僅供參考。</p>
   </footer>
+
+  <!-- 我的籌號 floating island -->
+  <div id="trackerIsland" class="tracker-island hidden" role="status"></div>
+
+  <!-- 追蹤設定 bottom sheet -->
+  <div id="sheetBackdrop" class="sheet-backdrop hidden">
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+      <div class="sheet-handle"></div>
+      <h3 id="sheetTitle">追蹤我嘅籌號</h3>
+      <p class="sheet-sub">拎咗籌之後,入你張飛個號碼,叫到附近會提你返去門口。</p>
+      <label class="sheet-label" for="sheetStore">分店</label>
+      <div class="field"><select id="sheetStore"></select></div>
+      <label class="sheet-label" for="sheetTicket">你嘅籌號</label>
+      <div class="field"><input id="sheetTicket" type="text" inputmode="numeric" placeholder="例如 128" autocomplete="off"></div>
+      <label class="sheet-label" for="sheetThreshold">幾時提醒你出發?</label>
+      <div class="field">
+        <select id="sheetThreshold">
+          <option value="3">差 3 組時</option>
+          <option value="5" selected>差 5 組時</option>
+          <option value="8">差 8 組時</option>
+          <option value="12">差 12 組時</option>
+        </select>
+      </div>
+      <button id="sheetStart" class="cta">
+        <span>開始追蹤</span>
+        <span class="cta-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
+      </button>
+      <button id="sheetCancel" class="ghost-btn">取消</button>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>
