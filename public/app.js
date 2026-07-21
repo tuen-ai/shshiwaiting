@@ -24,12 +24,50 @@
 
   /* ============ 示範數據(官方 API 唔通時用) ============ */
   const DEMO_STORES = [
-    { id: 1001, name: '壽司郎 旺角店', address: '旺角彌敦道 610 號荷李活商業中心', area: '九龍', storeStatus: 'OPEN', wait: 42 },
-    { id: 1002, name: '壽司郎 銅鑼灣店', address: '銅鑼灣軒尼詩道 489 號銅鑼灣廣場一期', area: '香港島', storeStatus: 'OPEN', wait: 18 },
-    { id: 1003, name: '壽司郎 沙田店', address: '沙田新城市廣場一期', area: '新界', storeStatus: 'OPEN', wait: 7 },
-    { id: 1004, name: '壽司郎 荃灣店', address: '荃灣愉景新城', area: '新界', storeStatus: 'CLOSED', wait: 0 },
-    { id: 1005, name: '壽司郎 尖沙咀店', address: '尖沙咀彌敦道 132 號美麗華廣場', area: '九龍', storeStatus: 'OPEN', wait: 63 },
+    { id: 1001, name: '壽司郎 旺角店', address: '旺角彌敦道 610 號荷李活商業中心', area: '九龍', storeStatus: 'OPEN', wait: 42, latitude: 22.3186, longitude: 114.1707 },
+    { id: 1002, name: '壽司郎 銅鑼灣店', address: '銅鑼灣軒尼詩道 489 號銅鑼灣廣場一期', area: '香港島', storeStatus: 'OPEN', wait: 18, latitude: 22.2803, longitude: 114.1826 },
+    { id: 1003, name: '壽司郎 沙田店', address: '沙田新城市廣場一期', area: '新界', storeStatus: 'OPEN', wait: 7, latitude: 22.3818, longitude: 114.1880 },
+    { id: 1004, name: '壽司郎 荃灣店', address: '荃灣愉景新城', area: '新界', storeStatus: 'CLOSED', wait: 0, latitude: 22.3728, longitude: 114.1178 },
+    { id: 1005, name: '壽司郎 尖沙咀店', address: '尖沙咀彌敦道 132 號美麗華廣場', area: '九龍', storeStatus: 'OPEN', wait: 63, latitude: 22.2986, longitude: 114.1722 },
   ];
+
+  /* ============ 附近 / 定位 ============ */
+  let currentTab = 'all';
+  let userPos = null;      // { lat, lng }
+  let geoState = 'idle';   // idle | asking | ok | denied
+
+  function haversineKm(lat1, lng1, lat2, lng2) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  function storeDistance(s) {
+    if (!userPos || !Number.isFinite(s.latitude) || !Number.isFinite(s.longitude)) return null;
+    return haversineKm(userPos.lat, userPos.lng, s.latitude, s.longitude);
+  }
+
+  function fmtDist(km) {
+    return km < 1 ? `${Math.round(km * 1000)} 米` : `${km.toFixed(1)} km`;
+  }
+
+  function requestGeo() {
+    if (!('geolocation' in navigator)) { geoState = 'denied'; render(); return; }
+    geoState = 'asking';
+    render();
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        userPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        geoState = 'ok';
+        render();
+      },
+      () => { geoState = 'denied'; render(); },
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 5 * 60 * 1000 }
+    );
+  }
 
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -83,16 +121,23 @@
   function visibleStores() {
     const q = $search.value.trim().toLowerCase();
     const area = $area.value;
-    const out = stores.filter(s =>
+    let out = stores.filter(s =>
       (!area || s.area === area) &&
       (!q || s.name.toLowerCase().includes(q) || (s.address || '').toLowerCase().includes(q))
     );
+    if (currentTab === 'fav') out = out.filter(s => bookmarks.has(s.id));
     const mode = $sort.value;
     out.sort((a, b) => {
-      const bm = (bookmarks.has(b.id) ? 1 : 0) - (bookmarks.has(a.id) ? 1 : 0);
-      if (bm) return bm;
+      if (currentTab !== 'near') {
+        const bm = (bookmarks.has(b.id) ? 1 : 0) - (bookmarks.has(a.id) ? 1 : 0);
+        if (bm) return bm;
+      }
       const openDiff = (a.storeStatus === 'OPEN' ? 0 : 1) - (b.storeStatus === 'OPEN' ? 0 : 1);
       if (openDiff) return openDiff;
+      if (currentTab === 'near') {
+        const da = storeDistance(a), db = storeDistance(b);
+        if (da !== null && db !== null && da !== db) return da - db;
+      }
       if (mode === 'wait-desc') return b.wait - a.wait;
       if (mode === 'name') return a.name.localeCompare(b.name, 'zh-HK');
       return a.wait - b.wait;
@@ -119,10 +164,30 @@
 
   function render() {
     renderSummary();
-    const list = visibleStores();
     $list.innerHTML = '';
+
+    // 附近 tab:未有定位權限時顯示提示
+    if (currentTab === 'near' && geoState !== 'ok') {
+      const box = document.createElement('div');
+      box.className = 'geo-card';
+      if (geoState === 'asking') {
+        box.innerHTML = '📡 攞緊你嘅位置…';
+      } else if (geoState === 'denied') {
+        box.innerHTML = '你封鎖咗定位權限。<br>去瀏覽器設定開返先可以睇附近分店。';
+      } else {
+        box.innerHTML = `想搵最近你嘅壽司郎?<br>需要攞一次你嘅位置(唔會儲存或者上傳)。
+          <button class="cta"><span>開啟定位</span></button>`;
+        box.querySelector('.cta').addEventListener('click', requestGeo);
+      }
+      $list.appendChild(box);
+      return;
+    }
+
+    const list = visibleStores();
     if (!list.length) {
-      $list.innerHTML = '<p class="empty-msg">冇符合嘅分店</p>';
+      $list.innerHTML = currentTab === 'fav'
+        ? '<p class="empty-msg">未有喜愛店舖。<br>撳分店卡嘅 ♥ 加入,以後喺度一眼睇晒。</p>'
+        : '<p class="empty-msg">冇符合嘅分店</p>';
       return;
     }
     list.forEach((store, i) => {
@@ -143,11 +208,11 @@
             <span class="status-dot ${isOpen ? 'open' : 'closed'}"></span>
             <span>${escapeHtml(store.name)}</span>
           </div>
-          <div class="store-addr">${escapeHtml(store.address || '')}</div>
+          <div class="store-addr">${distLabel(store)}${escapeHtml(store.address || '')}</div>
         </div>
         <div class="card-actions">
           <button class="mini-btn track">追蹤籌號</button>
-          <button class="mini-btn bookmark ${bookmarks.has(store.id) ? 'active' : ''}">★ 置頂</button>
+          <button class="mini-btn bookmark ${bookmarks.has(store.id) ? 'active' : ''}">${bookmarks.has(store.id) ? '♥ 喜愛' : '♡ 喜愛'}</button>
         </div>`;
 
       card.querySelector('.bookmark').addEventListener('click', (e) => {
@@ -162,7 +227,7 @@
       });
       card.addEventListener('click', () => toggleQueue(store));
 
-      if (expanded.has(store.id)) attachQueuePanel(card, store._queue);
+      if (expanded.has(store.id)) attachQueuePanel(card, store, store._queue);
       shell.appendChild(card);
       $list.appendChild(shell);
 
@@ -172,12 +237,21 @@
     firstRender = false;
   }
 
-  function attachQueuePanel(card, queue) {
+  function distLabel(store) {
+    const d = storeDistance(store);
+    return d === null ? '' : `<span class="dist">${fmtDist(d)}</span> · `;
+  }
+
+  function attachQueuePanel(card, store, queue) {
     const panel = document.createElement('div');
     panel.className = 'queue-panel';
-    if (queue === undefined) panel.textContent = '載入籌號中…';
-    else if (!queue || !queue.length) panel.textContent = '而家冇叫緊嘅籌號';
-    else panel.innerHTML = `叫緊嘅籌號:<div class="queue-numbers">${queue.map(n => `<span>${escapeHtml(n)}</span>`).join('')}</div>`;
+    const mapLink = Number.isFinite(store.latitude)
+      ? `<a class="map-link" href="https://www.google.com/maps/search/?api=1&query=${store.latitude},${store.longitude}" target="_blank" rel="noopener">地圖 ↗</a>`
+      : '';
+    if (queue === undefined) panel.innerHTML = `${mapLink}載入籌號中…`;
+    else if (!queue || !queue.length) panel.innerHTML = `${mapLink}而家冇叫緊嘅籌號`;
+    else panel.innerHTML = `${mapLink}叫緊嘅籌號:<div class="queue-numbers">${queue.map(n => `<span>${escapeHtml(n)}</span>`).join('')}</div>`;
+    panel.querySelector('.map-link')?.addEventListener('click', (e) => e.stopPropagation());
     card.appendChild(panel);
   }
 
@@ -443,6 +517,16 @@
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('sw.js').catch(() => { /* 註冊唔到照行 */ });
   }
+
+  /* ============ Tabs ============ */
+  document.querySelectorAll('.tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      currentTab = btn.dataset.tab;
+      document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b === btn));
+      if (currentTab === 'near' && geoState === 'idle') requestGeo();
+      else render();
+    });
+  });
 
   /* ============ 事件 ============ */
   $search.addEventListener('input', render);

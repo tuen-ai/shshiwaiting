@@ -215,6 +215,59 @@ body {
 }
 .summary-chips b { color: var(--ink); font-variant-numeric: tabular-nums; }
 
+/* ---------- Tabs ---------- */
+.tabs {
+  position: relative;
+  z-index: 1;
+  max-width: 680px;
+  margin: 1.1rem auto 0;
+  padding: 0 1.25rem;
+  display: flex;
+  gap: 0.4rem;
+}
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid var(--hairline);
+  background: var(--card-shell);
+  color: var(--muted);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0.5rem 1.05rem;
+  cursor: pointer;
+  transition: transform 0.4s var(--ease), background 0.4s var(--ease), color 0.4s var(--ease), border-color 0.4s var(--ease);
+}
+.tab svg { width: 0.95rem; height: 0.95rem; }
+.tab:active { transform: scale(0.95); }
+.tab.active {
+  color: #fff;
+  background: linear-gradient(120deg, var(--brand-deep), var(--brand));
+  border-color: transparent;
+  box-shadow: 0 10px 25px -12px rgba(200, 16, 46, 0.6);
+}
+.dist {
+  color: var(--amber);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.geo-card {
+  text-align: center;
+  padding: 2.2rem 1.5rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.8;
+}
+.geo-card .cta { max-width: 260px; margin: 1rem auto 0; }
+.map-link {
+  color: var(--amber);
+  text-decoration: none;
+  font-size: 0.75rem;
+  float: right;
+}
+
 /* ---------- 篩選 ---------- */
 .controls {
   position: relative;

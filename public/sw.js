@@ -1,6 +1,6 @@
 /* 壽司郎排隊追蹤器 — Service Worker
    靜態資源 cache-first(背景更新),API 請求永遠行網絡(排隊數據唔可以 stale)。 */
-const CACHE = 'shshiwaiting-v1';
+const CACHE = 'shshiwaiting-v2';
 const ASSETS = [
   './',
   'index.html',
