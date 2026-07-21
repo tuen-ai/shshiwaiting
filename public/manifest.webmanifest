@@ -1,0 +1,17 @@
+{
+  "name": "壽司郎排隊追蹤器",
+  "short_name": "壽記追蹤",
+  "description": "香港壽司郎分店即時排隊等候人數,追蹤你嘅籌號兼提你返店",
+  "lang": "zh-HK",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0908",
+  "theme_color": "#0a0908",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

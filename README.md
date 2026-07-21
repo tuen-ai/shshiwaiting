@@ -35,8 +35,13 @@ Server 會 cache 60 秒,避免對官方 API 造成壓力。
 - 分店/地址搜尋、地區篩選、排序;⭐ 書籤置頂常去分店
 - 撳分店卡可以睇到而家叫緊嘅籌號
 - 每分鐘自動更新,亦可手動 refresh
-- 深色玻璃質感 UI,手機優先響應式設計
+- 深色玻璃質感 UI + ☀️ 淺色主題(跟系統預設,右上角可以手動切換,揀咗會記住)
 - 🧪 官方 API 連接唔到時自動切換示範數據(會標明「示範」,demo queue 會自動行前方便試提醒功能)
+
+### 📲 PWA
+- 可以「加至主畫面」當 app 用(manifest + service worker + 自家 icon)
+- 靜態資源離線 cache,排隊數據永遠行網絡攞最新
+- 注意:iOS 上通知要 iOS 16.4+ 並且加咗主畫面先收到;真正「閂晒 app 都收到」嘅 background push 需要 push server,暫未包括
 
 ## 本地運行
 
@@ -52,12 +57,31 @@ node server.js
 
 ## 部署
 
+### GitHub Pages(靜態,已設定自動部署)
+
+`.github/workflows/pages.yml` 會自動將 `public/` 部署上 GitHub Pages。因為 Pages 冇 server,
+前端會自動 fallback 用公共 CORS proxy 直連 SushiPass API(同原網站一樣嘅技術):
+
+```
+同源 /api/stores(有 Node proxy 時)
+  ↓ 唔得就
+corsproxy.io → SushiPass
+  ↓ 唔得就
+cors.freehi.workers.dev → SushiPass
+  ↓ 全部唔得
+示範數據模式
+```
+
+如果 workflow 行完但頁面未出,去 repo **Settings → Pages** 確認 Source 係「GitHub Actions」。
+
+### 自己 host(Node)
+
 任何可以行 Node.js 嘅平台都得,例如 Render / Railway / Fly.io:
 
 - Start command: `node server.js`
 - Port 由 `PORT` 環境變數控制(預設 3000)
 
-> ⚠️ SushiPass API 可能會封鎖香港以外嘅 IP,建議部署喺亞洲區 server。
+> ⚠️ SushiPass API 可能會封鎖香港以外嘅 IP:你喺香港用瀏覽器開 Pages 版係經你自己/CF 邊緣節點,一般冇問題;但海外 server host 就可能收 403,建議揀亞洲區。
 
 ## 聲明
 

@@ -33,6 +33,45 @@
 
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  /* ============ 數據來源 ============
+     1. 同源 Node proxy (api/stores) — 自己 host 時用
+     2. CORS proxy 直連 SushiPass — GitHub Pages 等靜態 host 時用
+     揀到邊個用邊個,之後停留喺嗰個模式 */
+  const SUSHIPASS = 'https://sushipass.sushiro.com.hk/api/2.0';
+  const CORS_PROXIES = [
+    (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
+    (u) => `https://cors.freehi.workers.dev/?${u}`,
+  ];
+  let apiMode = null; // 'server' | 0 | 1 (proxy index)
+
+  async function fetchJson(url, timeoutMs = 12000) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { signal: ctrl.signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    } finally { clearTimeout(timer); }
+  }
+
+  async function fetchStoresAny() {
+    if (apiMode === null || apiMode === 'server') {
+      try {
+        const r = await fetchJson(new URL('api/stores', location.href));
+        if (r && Array.isArray(r.stores)) { apiMode = 'server'; return r; }
+      } catch { /* 落一個來源 */ }
+    }
+    const upstream = `${SUSHIPASS}/info/storelist?latitude=22.32&longitude=114.17&numresults=100&region=HK`;
+    const order = typeof apiMode === 'number' ? [apiMode, ...CORS_PROXIES.keys()] : [...CORS_PROXIES.keys()];
+    for (const i of [...new Set(order)]) {
+      try {
+        const data = await fetchJson(CORS_PROXIES[i](upstream));
+        if (Array.isArray(data)) { apiMode = i; return { updatedAt: Date.now(), stores: data }; }
+      } catch { /* 試下一個 */ }
+    }
+    throw new Error('all sources failed');
+  }
+
   /* ============ 分店列表 ============ */
   function waitClass(store) {
     if (store.storeStatus !== 'OPEN') return 'wait-closed';
@@ -156,9 +195,12 @@
       return store && store.wait ? [base, base + 3, base + 7] : [];
     }
     try {
-      const res = await fetch(`/api/queue/${storeId}`);
-      if (!res.ok) return null;
-      const data = await res.json();
+      let data;
+      if (apiMode === 'server') {
+        data = await fetchJson(new URL(`api/queue/${storeId}`, location.href));
+      } else if (typeof apiMode === 'number') {
+        data = await fetchJson(CORS_PROXIES[apiMode](`${SUSHIPASS}/remote/groupqueues?region=HK&storeid=${storeId}`));
+      } else return null;
       return data.storeQueue || [];
     } catch { return null; }
   }
@@ -174,9 +216,7 @@
   async function load(manual = false) {
     if (manual) $refresh.classList.add('spinning');
     try {
-      const res = await fetch('/api/stores');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const payload = await res.json();
+      const payload = await fetchStoresAny();
       stores = (payload.stores || []).map(s => ({ ...s, _queue: undefined }));
       demoMode = false;
       $demoBadge.classList.add('hidden');
@@ -381,6 +421,28 @@
     closeSheet();
     startTracking(store.id, store.name, ticket, parseInt($('sheetThreshold').value, 10));
   });
+
+  /* ============ 主題切換 ============ */
+  const $themeBtn = $('themeBtn');
+  function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    $('themeIconMoon').classList.toggle('hidden', theme === 'light');
+    $('themeIconSun').classList.toggle('hidden', theme !== 'light');
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = theme === 'light' ? '#f6f1e7' : '#0a0908';
+  }
+  const savedTheme = localStorage.getItem('sushiro-theme');
+  applyTheme(savedTheme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+  $themeBtn.addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+    localStorage.setItem('sushiro-theme', next);
+    applyTheme(next);
+  });
+
+  /* ============ PWA ============ */
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    navigator.serviceWorker.register('sw.js').catch(() => { /* 註冊唔到照行 */ });
+  }
 
   /* ============ 事件 ============ */
   $search.addEventListener('input', render);
