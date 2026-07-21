@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>壽司郎排隊追蹤器 🍣</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍣</text></svg>">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <h1>🍣 壽司郎排隊追蹤器</h1>
+      <button id="refreshBtn" class="refresh-btn" title="即刻更新">⟳</button>
+    </div>
+    <div class="meta-row">
+      <span id="updatedAt">載入中…</span>
+      <span id="demoBadge" class="demo-badge hidden">示範數據</span>
+    </div>
+  </header>
+
+  <div class="controls">
+    <input id="searchBox" type="search" placeholder="搜尋分店 / 地址…" autocomplete="off">
+    <select id="areaFilter">
+      <option value="">全部地區</option>
+    </select>
+    <select id="sortBy">
+      <option value="wait-asc">等候 少 → 多</option>
+      <option value="wait-desc">等候 多 → 少</option>
+      <option value="name">按名稱</option>
+    </select>
+  </div>
+
+  <main id="storeList" class="store-list" aria-live="polite"></main>
+
+  <footer class="footer">
+    <p>數據來自壽司郎 SushiPass API,每分鐘自動更新。非官方網站,僅供參考。</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

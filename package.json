@@ -1,0 +1,13 @@
+{
+  "name": "shshiwaiting",
+  "version": "1.0.0",
+  "description": "壽司郎排隊追蹤器 — 香港壽司郎分店即時等候人數 (非官方)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
