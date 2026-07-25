@@ -1,8 +1,8 @@
 /* 壽司郎排隊追蹤器 — 前端邏輯 */
 (() => {
-  const REFRESH_MS = 60 * 1000;      // 分店列表更新
-  const TRACK_MS = 20 * 1000;        // 追蹤中籌號更新
-  const TRACK_MS_DEMO = 6 * 1000;    // 示範模式行快啲,方便試提醒
+  const REFRESH_MS = 30 * 1000;      // 分店列表更新
+  const TRACK_MS = 15 * 1000;        // 追蹤中籌號更新
+  const STALE_MS = 90 * 1000;        // 超過呢個秒數就當數據過期,要警告用戶
 
   const $ = (id) => document.getElementById(id);
   const $list = $('storeList');
@@ -17,12 +17,16 @@
   const $backdrop = $('sheetBackdrop');
 
   let stores = [];
-  let demoMode = false;
+  // 示範數據淨係喺 URL 明確加咗 ?demo=1 先會開,絕對唔會因為 API 失敗而靜靜切過去。
+  // 排隊數字係用嚟決定去唔去食飯嘅,寧願冇數據都好過俾個似層層嘅假數。
+  const demoMode = new URLSearchParams(location.search).get('demo') === '1';
+  let dataTime = null;      // 呢批數據實際由官方攞返嚟嘅時間
+  let lastError = null;     // 最後一次失敗原因,顯示俾用戶睇
   let firstRender = true;
   const expanded = new Set();
   const bookmarks = new Set(JSON.parse(localStorage.getItem('sushiro-bookmarks') || '[]'));
 
-  /* ============ 示範數據(官方 API 唔通時用) ============ */
+  /* ============ 示範數據(淨係 ?demo=1 先用,唔會當真實數據) ============ */
   const DEMO_STORES = [
     { id: 1001, name: '壽司郎 旺角店', address: '旺角彌敦道 610 號荷李活商業中心', area: '九龍', storeStatus: 'OPEN', wait: 42, latitude: 22.3186, longitude: 114.1707 },
     { id: 1002, name: '壽司郎 銅鑼灣店', address: '銅鑼灣軒尼詩道 489 號銅鑼灣廣場一期', area: '香港島', storeStatus: 'OPEN', wait: 18, latitude: 22.2803, longitude: 114.1826 },
@@ -82,7 +86,8 @@
   ];
   let apiMode = null; // 'server' | 0 | 1 (proxy index)
 
-  async function fetchJson(url, timeoutMs = 12000) {
+  // 6 秒就放棄轉下一個來源:要試 3 個來源,timeout 太長會令用戶對住空白畫面幾十秒
+  async function fetchJson(url, timeoutMs = 6000) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
@@ -92,29 +97,60 @@
     } finally { clearTimeout(timer); }
   }
 
+  const SOURCE_NAMES = { server: '自家 proxy', 0: 'corsproxy.io', 1: 'freehi worker', direct: '官方直連' };
+
   async function fetchStoresAny() {
+    const errs = [];
+    const upstream = `${SUSHIPASS}/info/storelist?latitude=22.32&longitude=114.17&numresults=25&region=HK`;
+
+    // 1. 同源 Node proxy(自己 host 時)
     if (apiMode === null || apiMode === 'server') {
       try {
         const r = await fetchJson(new URL('api/stores', location.href));
-        if (r && Array.isArray(r.stores)) { apiMode = 'server'; return r; }
-      } catch { /* 落一個來源 */ }
+        if (r && Array.isArray(r.stores)) {
+          apiMode = 'server';
+          // server 會回傳佢實際 call 官方 API 嗰刻嘅時間,唔係我哋收到嘅時間
+          return { fetchedAt: r.fetchedAt || r.updatedAt || Date.now(), stores: r.stores };
+        }
+        errs.push('proxy 回傳格式唔啱');
+      } catch (e) { errs.push(`自家 proxy: ${e.message}`); }
     }
-    const upstream = `${SUSHIPASS}/info/storelist?latitude=22.32&longitude=114.17&numresults=100&region=HK`;
+
+    // 2. 直接 call 官方(同源部署 / 官方有開 CORS 時會成功)
+    if (apiMode === null || apiMode === 'direct') {
+      try {
+        const data = await fetchJson(upstream);
+        if (Array.isArray(data)) { apiMode = 'direct'; return { fetchedAt: Date.now(), stores: data }; }
+      } catch (e) { errs.push(`直連: ${e.message}`); }
+    }
+
+    // 3. 公共 CORS proxy(GitHub Pages 等靜態 host)
     const order = typeof apiMode === 'number' ? [apiMode, ...CORS_PROXIES.keys()] : [...CORS_PROXIES.keys()];
     for (const i of [...new Set(order)]) {
       try {
         const data = await fetchJson(CORS_PROXIES[i](upstream));
-        if (Array.isArray(data)) { apiMode = i; return { updatedAt: Date.now(), stores: data }; }
-      } catch { /* 試下一個 */ }
+        if (Array.isArray(data)) { apiMode = i; return { fetchedAt: Date.now(), stores: data }; }
+        errs.push(`${SOURCE_NAMES[i]}: 回傳唔係分店列表`);
+      } catch (e) { errs.push(`${SOURCE_NAMES[i]}: ${e.message}`); }
     }
-    throw new Error('all sources failed');
+    apiMode = null;
+    throw new Error(errs.join(' / ') || '所有來源都連唔到');
   }
 
   /* ============ 分店列表 ============ */
+  // 官方 API 冇回傳 wait(或者係 null / 字串)嗰陣,一定唔可以當 0 處理 —
+  // 舊版 `undefined >= 30` 係 false,結果未知等候人數會渲染成綠色「好少人等」,誤導性極高。
+  const waitOf = (s) => {
+    const n = typeof s.wait === 'number' ? s.wait : parseInt(s.wait, 10);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  };
+
   function waitClass(store) {
     if (store.storeStatus !== 'OPEN') return 'wait-closed';
-    if (store.wait >= 30) return 'wait-high';
-    if (store.wait >= 10) return 'wait-mid';
+    const w = waitOf(store);
+    if (w === null) return 'wait-unknown';
+    if (w >= 30) return 'wait-high';
+    if (w >= 10) return 'wait-mid';
     return 'wait-low';
   }
 
@@ -138,9 +174,11 @@
         const da = storeDistance(a), db = storeDistance(b);
         if (da !== null && db !== null && da !== db) return da - db;
       }
-      if (mode === 'wait-desc') return b.wait - a.wait;
       if (mode === 'name') return a.name.localeCompare(b.name, 'zh-HK');
-      return a.wait - b.wait;
+      // 未知等候人數一律排最後,唔可以當 0 排喺最前扮「最少人」
+      const wa = waitOf(a), wb = waitOf(b);
+      if (wa === null || wb === null) return (wa === null ? 1 : 0) - (wb === null ? 1 : 0);
+      return mode === 'wait-desc' ? wb - wa : wa - wb;
     });
     return out;
   }
@@ -152,19 +190,35 @@
   }, { threshold: 0.05 });
 
   function renderSummary() {
-    const open = stores.filter(s => s.storeStatus === 'OPEN');
+    // 只用真係有等候數字嘅分店嚟做統計,唔會將未知當 0 撈落總數
+    const open = stores.filter(s => s.storeStatus === 'OPEN' && waitOf(s) !== null);
     if (!open.length) { $chips.innerHTML = ''; return; }
-    const min = open.reduce((a, b) => (a.wait <= b.wait ? a : b));
-    const total = open.reduce((n, s) => n + s.wait, 0);
+    const min = open.reduce((a, b) => (waitOf(a) <= waitOf(b) ? a : b));
+    const total = open.reduce((n, s) => n + waitOf(s), 0);
     $chips.innerHTML = `
       <span>營業中 <b>${open.length}</b> 間</span>
-      <span>最快:<b>${escapeHtml(min.name.replace(/^壽司郎\s*/, ''))}</b> 等 <b>${min.wait}</b> 組</span>
+      <span>最快:<b>${escapeHtml(min.name.replace(/^壽司郎\s*/, ''))}</b> 等 <b>${waitOf(min)}</b> 組</span>
       <span>全港合共 <b>${total}</b> 組等緊</span>`;
   }
 
   function render() {
     renderSummary();
+    renderFreshness();
     $list.innerHTML = '';
+
+    // 完全冇數據:誠實顯示連唔到,絕對唔會攞假數字充數
+    if (!stores.length) {
+      const box = document.createElement('div');
+      box.className = 'geo-card';
+      box.innerHTML = lastError
+        ? `⚠️ 而家攞唔到實時排隊數據。<br><span class="err-detail">${escapeHtml(lastError)}</span><br>
+           官方 API 可能封鎖咗香港以外嘅網絡,或者暫時故障。<br>
+           <button class="cta"><span>再試一次</span></button>`
+        : '載入緊…';
+      box.querySelector('.cta')?.addEventListener('click', () => load(true));
+      $list.appendChild(box);
+      return;
+    }
 
     // 附近 tab:未有定位權限時顯示提示
     if (currentTab === 'near' && geoState !== 'ok') {
@@ -200,8 +254,8 @@
       card.className = 'store-card' + (expanded.has(store.id) ? ' expanded' : '');
       card.innerHTML = `
         <div class="wait-badge ${waitClass(store)}">
-          <div class="num">${isOpen ? store.wait : '—'}</div>
-          <div class="unit">${isOpen ? '組等候' : '休息中'}</div>
+          <div class="num">${!isOpen ? '—' : (waitOf(store) === null ? '?' : waitOf(store))}</div>
+          <div class="unit">${!isOpen ? '休息中' : (waitOf(store) === null ? '冇數據' : '組等候')}</div>
         </div>
         <div class="store-info">
           <div class="store-name">
@@ -265,8 +319,8 @@
 
   async function fetchQueue(storeId, store) {
     if (demoMode) {
-      const base = demoCalledBase(storeId);
-      return store && store.wait ? [base, base + 3, base + 7] : [];
+      const base = demoAdvance(storeId);
+      return store && waitOf(store) ? [base, base + 3, base + 7] : [];
     }
     try {
       let data;
@@ -287,23 +341,45 @@
     $area.value = current;
   }
 
+  // 顯示數據有幾新鮮 — 每秒跳一次,過期就變色警告。
+  // 舊版寫死「更新於 14:32」永遠唔郁,10 分鐘前嘅數據睇落同啱啱攞嘅一模一樣。
+  function renderFreshness() {
+    if (demoMode) {
+      $updatedAt.textContent = '⚠️ 示範數據 · 全部數字都係假,唔好信';
+      $updatedAt.className = 'updated stale-bad';
+      return;
+    }
+    if (dataTime === null) {
+      $updatedAt.textContent = lastError ? '⚠️ 攞唔到實時數據' : '載入中…';
+      $updatedAt.className = 'updated' + (lastError ? ' stale-bad' : '');
+      return;
+    }
+    const age = Math.round((Date.now() - dataTime) / 1000);
+    const txt = age < 5 ? '啱啱更新' : age < 60 ? `${age} 秒前` : `${Math.floor(age / 60)} 分鐘前`;
+    const src = SOURCE_NAMES[apiMode] || '';
+    $updatedAt.textContent = `${txt}${src ? ' · ' + src : ''}${lastError ? ' · 更新失敗中' : ''}`;
+    $updatedAt.className = 'updated' +
+      (age * 1000 > STALE_MS * 3 ? ' stale-bad' : age * 1000 > STALE_MS ? ' stale-warn' : '');
+  }
+
   async function load(manual = false) {
     if (manual) $refresh.classList.add('spinning');
+    if (demoMode) {
+      stores = DEMO_STORES.map(s => ({ ...s }));
+      dataTime = Date.now();
+      $demoBadge.classList.remove('hidden');
+      populateAreaFilter(); render();
+      $refresh.classList.remove('spinning');
+      return;
+    }
     try {
       const payload = await fetchStoresAny();
       stores = (payload.stores || []).map(s => ({ ...s, _queue: undefined }));
-      demoMode = false;
-      $demoBadge.classList.add('hidden');
-      $updatedAt.textContent = `更新於 ${new Date(payload.updatedAt).toLocaleTimeString('zh-HK', { hour: '2-digit', minute: '2-digit' })}`;
+      dataTime = payload.fetchedAt;
+      lastError = null;
     } catch (err) {
-      if (!stores.length) {
-        stores = DEMO_STORES.map(s => ({ ...s }));
-        demoMode = true;
-        $demoBadge.classList.remove('hidden');
-        $updatedAt.textContent = 'API 連接唔到 · 示範數據';
-      } else {
-        $updatedAt.textContent = `更新失敗,顯示上次數據`;
-      }
+      // 攞唔到就保留舊數據但標明過期,絕對唔會用假數據頂上
+      lastError = err.message;
     }
     populateAreaFilter();
     render();
@@ -315,18 +391,15 @@
   let trackTimer = null;
   let audioCtx = null;
 
-  // 示範模式:每間店一個會慢慢行前嘅「而家叫到」號碼
+  // 示範模式:每間店一個會慢慢行前嘅「而家叫到」號碼。
+  // 呢啲數字係假嘅,所以喺 demo 模式下唔會發出任何「到你喇」提醒 —
+  // 用假數據叫人出門口係最壞嘅 bug。
   const demoCalled = new Map();
-  function demoCalledBase(storeId) {
-    if (!demoCalled.has(storeId)) {
-      const seed = tracking && tracking.storeId === storeId ? tracking.ticket - 12 : 100;
-      demoCalled.set(storeId, seed);
-    }
-    return demoCalled.get(storeId);
-  }
   function demoAdvance(storeId) {
-    const cur = demoCalledBase(storeId);
-    const next = cur + 1 + Math.floor(Math.random() * 2);
+    if (!demoCalled.has(storeId)) {
+      demoCalled.set(storeId, tracking && tracking.storeId === storeId ? tracking.ticket - 12 : 100);
+    }
+    const next = demoCalled.get(storeId) + 1 + Math.floor(Math.random() * 2);
     demoCalled.set(storeId, next);
     return next;
   }
@@ -375,7 +448,8 @@
   function startTracking(storeId, storeName, ticket, threshold) {
     tracking = {
       storeId, storeName, ticket, threshold,
-      startCalled: null, lastCalled: null,
+      startCalled: null, startAt: null, lastCalled: null,
+      lastPollAt: null, staleSince: null,
       notifiedNear: false, notifiedArrived: false,
     };
     saveTracking();
@@ -389,7 +463,7 @@
 
   function armTrackTimer() {
     clearInterval(trackTimer);
-    trackTimer = setInterval(pollTracking, demoMode ? TRACK_MS_DEMO : TRACK_MS);
+    trackTimer = setInterval(pollTracking, TRACK_MS);
   }
 
   function parseCalled(queue) {
@@ -400,32 +474,53 @@
 
   async function pollTracking() {
     if (!tracking) return;
-    let called = null;
-    if (demoMode) {
-      called = demoAdvance(tracking.storeId);
-    } else {
-      const queue = await fetchQueue(tracking.storeId);
-      called = parseCalled(queue);
-    }
-    if (called !== null) {
-      tracking.lastCalled = called;
-      if (tracking.startCalled === null) tracking.startCalled = Math.min(called, tracking.ticket);
-    }
-    const remaining = tracking.lastCalled === null ? null : tracking.ticket - tracking.lastCalled;
+    const called = demoMode
+      ? demoAdvance(tracking.storeId)
+      : parseCalled(await fetchQueue(tracking.storeId));
 
-    if (remaining !== null && remaining <= 0 && !tracking.notifiedArrived) {
+    if (called === null) {
+      // 攞唔到就記低,島上會顯示「數據唔新鮮」而唔係扮住繼續倒數
+      tracking.staleSince = tracking.staleSince || Date.now();
+      saveTracking(); renderIsland();
+      return;
+    }
+    tracking.staleSince = null;
+    tracking.lastCalled = called;
+    tracking.lastPollAt = Date.now();
+    if (tracking.startCalled === null) {
+      tracking.startCalled = Math.min(called, tracking.ticket);
+      tracking.startAt = Date.now();
+    }
+    const remaining = tracking.ticket - called;
+
+    // demo 模式嘅數字係假嘅,唔可以攞嚟叫人出門
+    const mayNotify = !demoMode;
+    if (remaining <= 0 && !tracking.notifiedArrived) {
       tracking.notifiedArrived = true;
-      notify('🍣 到你喇!', `${tracking.storeName} 已經叫到 ${tracking.lastCalled} 號,快啲去門口!`);
+      if (mayNotify) notify('🍣 到你喇!', `${tracking.storeName} 已經叫到 ${called} 號,快啲去門口!`);
       document.title = '🔔 到你喇! — 壽司郎';
-    } else if (remaining !== null && remaining > 0 && remaining <= tracking.threshold && !tracking.notifiedNear) {
+    } else if (remaining > 0 && remaining <= tracking.threshold && !tracking.notifiedNear) {
       tracking.notifiedNear = true;
-      notify('🚶 好出發喇!', `${tracking.storeName} 仲差 ${remaining} 組就到你(你係 ${tracking.ticket} 號)`);
+      if (mayNotify) notify('🚶 好出發喇!', `${tracking.storeName} 仲差 ${remaining} 組就到你(你係 ${tracking.ticket} 號)`);
       document.title = `仲差 ${remaining} 組 — 壽司郎`;
-    } else if (remaining !== null && remaining > 0) {
+    } else if (remaining > 0) {
       document.title = `仲差 ${remaining} 組 — 壽司郎`;
     }
     saveTracking();
     renderIsland();
+  }
+
+  // 實測嘅叫號速度:由開始追蹤到而家,平均每組要幾耐。
+  // 舊版寫死「每組 3 分鐘」係我憑空作出嚟嘅,冇任何根據。
+  function etaMinutes() {
+    const { startCalled, startAt, lastCalled } = tracking;
+    if (startAt == null || startCalled == null || lastCalled == null) return null;
+    const advanced = lastCalled - startCalled;
+    const elapsedMin = (Date.now() - startAt) / 60000;
+    if (advanced < 3 || elapsedMin < 2) return null;   // 樣本太少,唔亂估
+    const perGroup = elapsedMin / advanced;
+    const remaining = tracking.ticket - lastCalled;
+    return Math.max(1, Math.round(perGroup * remaining));
   }
 
   function renderIsland() {
@@ -450,8 +545,10 @@
     } else if (lastCalled === null) {
       statusHtml = `<div class="tracker-status">等緊第一次數據…</div>`;
     } else {
-      const eta = remaining * 3;
-      statusHtml = `<div class="tracker-status">而家叫到 <b>${lastCalled}</b> · 仲差 <b>${remaining}</b> 組${near ? ' · 好出發喇 🚶' : ` · 粗略估計 ~${eta} 分鐘`}</div>`;
+      const eta = etaMinutes();
+      const stale = tracking.staleSince ? ' · <span class="stale-bad">數據未更新到</span>' : '';
+      const tail = near ? ' · 好出發喇 🚶' : (eta !== null ? ` · 照而家速度約 ${eta} 分鐘` : '');
+      statusHtml = `<div class="tracker-status">而家叫到 <b>${lastCalled}</b> · 仲差 <b>${remaining}</b> 組${tail}${stale}</div>`;
     }
 
     $island.className = 'tracker-island' + (arrived ? ' arrived' : near ? ' near' : '');
@@ -535,6 +632,7 @@
   $refresh.addEventListener('click', () => load(true));
 
   /* ============ 啟動 ============ */
+  render();   // 即刻畫「載入中」,唔好對住一片空白
   load().then(() => {
     if (tracking) {
       armTrackTimer();
@@ -542,5 +640,22 @@
       renderIsland();
     }
   });
-  setInterval(load, REFRESH_MS);
+
+  let refreshTimer = setInterval(load, REFRESH_MS);
+
+  // 手機熄屏 / 切去第二個 app 嗰陣,瀏覽器會大幅 throttle 甚至凍結 setInterval,
+  // 所以一返到嚟就即刻補做一次 + 重新 arm 計時器。冇呢個嘅話你打開手機
+  // 見到嘅係幾分鐘前嘅舊數字,而「到你喇」嘅提醒亦會遲到。
+  function resume() {
+    if (document.visibilityState !== 'visible') return;
+    clearInterval(refreshTimer);
+    refreshTimer = setInterval(load, REFRESH_MS);
+    load();
+    if (tracking) { armTrackTimer(); pollTracking(); }
+  }
+  document.addEventListener('visibilitychange', resume);
+  window.addEventListener('online', resume);
+
+  // 每秒更新「幾秒前」,令過期數據一眼睇得出
+  setInterval(() => { renderFreshness(); if (tracking) renderIsland(); }, 1000);
 })();

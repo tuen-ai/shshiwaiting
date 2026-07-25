@@ -1,6 +1,6 @@
 /* 壽司郎排隊追蹤器 — Service Worker
    靜態資源 cache-first(背景更新),API 請求永遠行網絡(排隊數據唔可以 stale)。 */
-const CACHE = 'shshiwaiting-v2';
+const CACHE = 'shshiwaiting-v3';
 const ASSETS = [
   './',
   'index.html',
@@ -36,7 +36,23 @@ self.addEventListener('fetch', (e) => {
     url.hostname.includes('workers.dev');
   if (isLive || url.origin !== location.origin) return;
 
-  // 靜態資源:cache-first + 背景更新 (stale-while-revalidate)
+  // App shell(HTML / JS / CSS):network-first。
+  // 用 cache-first 嘅話,修正咗嘅程式碼要開兩次網先生效 —— 對住一個
+  // 「顯示錯數據」嘅 bug 修正,咁樣等於用戶會再中多一次。離線先用 cache。
+  const isShell = e.request.mode === 'navigate' || /\.(html|js|css)$/.test(url.pathname) || url.pathname.endsWith('/');
+  if (isShell) {
+    e.respondWith(
+      fetch(e.request)
+        .then((res) => {
+          if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); }
+          return res;
+        })
+        .catch(() => caches.match(e.request).then((hit) => hit || caches.match('index.html')))
+    );
+    return;
+  }
+
+  // 其他靜態資源(圖示等):cache-first + 背景更新
   e.respondWith(
     caches.match(e.request).then((hit) => {
       const fresh = fetch(e.request)

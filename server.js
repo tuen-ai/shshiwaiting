@@ -12,7 +12,9 @@ const path = require('path');
 
 const PORT = process.env.PORT || 3000;
 const SUSHIPASS = 'https://sushipass.sushiro.com.hk/api/2.0';
-const CACHE_TTL_MS = 60 * 1000; // 每個 endpoint cache 60 秒
+// 排隊人數變化好快,cache 太耐就唔算實時。15 秒係「唔轟炸官方 API」同
+// 「數字夠新鮮」之間嘅平衡:前端每 30 秒 refresh,最多滯後約 45 秒。
+const CACHE_TTL_MS = 15 * 1000;
 
 const cache = new Map(); // url -> { time, data }
 
@@ -71,10 +73,12 @@ const server = http.createServer(async (req, res) => {
 
   try {
     // GET /api/stores — 全港分店 + 等候組數
+    // fetchedAt 係實際由官方 API 攞返嚟嗰刻,唔係而家回應嘅時間 —
+    // 咁前端先可以誠實顯示「呢個數字有幾舊」。
     if (url.pathname === '/api/stores') {
-      const upstream = `${SUSHIPASS}/info/storelist?latitude=22.32&longitude=114.17&numresults=100&region=HK`;
+      const upstream = `${SUSHIPASS}/info/storelist?latitude=22.32&longitude=114.17&numresults=25&region=HK`;
       const { data, cached } = await fetchWithCache(upstream);
-      return sendJson(res, 200, { updatedAt: cache.get(upstream).time, cached, stores: data });
+      return sendJson(res, 200, { fetchedAt: cache.get(upstream).time, cached, stores: data });
     }
 
     // GET /api/queue/:storeid — 單一分店叫緊嘅籌號
@@ -82,7 +86,7 @@ const server = http.createServer(async (req, res) => {
     if (queueMatch) {
       const upstream = `${SUSHIPASS}/remote/groupqueues?region=HK&storeid=${queueMatch[1]}`;
       const { data, cached } = await fetchWithCache(upstream);
-      return sendJson(res, 200, { updatedAt: cache.get(upstream).time, cached, ...data });
+      return sendJson(res, 200, { fetchedAt: cache.get(upstream).time, cached, ...data });
     }
 
     if (url.pathname.startsWith('/api/')) {

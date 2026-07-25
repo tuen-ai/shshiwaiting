@@ -141,6 +141,24 @@ body {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+/* 數據新鮮度警告 */
+.updated.stale-warn { color: var(--amber); }
+.updated.stale-bad { color: var(--red); font-weight: 600; }
+.stale-bad { color: var(--red); }
+.err-detail {
+  display: inline-block;
+  font-size: 0.7rem;
+  color: var(--faint);
+  word-break: break-word;
+  margin: 0.3rem 0;
+}
+/* 官方冇回傳等候人數:一定要睇得出係「未知」,唔可以扮 0 */
+.wait-unknown {
+  color: var(--faint);
+  border-color: var(--hairline-strong);
+  background: repeating-linear-gradient(45deg, rgba(255,255,255,0.03) 0 6px, transparent 6px 12px);
+}
+
 .demo-badge {
   font-size: 0.62rem;
   font-weight: 700;
