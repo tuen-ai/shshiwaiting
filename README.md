@@ -1,10 +1,23 @@
 # 🍣 壽司郎排隊追蹤器 (shshiwaiting)
 
-香港壽司郎分店**即時排隊等候人數**追蹤網站,參考 [sushiro-hk-tracker](https://sushiro-hk-tracker.gosa.app/) 用同一技術製作。
+香港壽司郎分店**即時排隊等候人數**追蹤網站。
 
-## 運作原理
+## ⚠️ 未驗證聲明(重要)
 
-香港壽司郎官方 App 背後係一個叫 **SushiPass** 嘅系統,佢嘅 REST API 唔使登入就可以讀到:
+開發呢個 project 嘅環境喺香港以外,而且被網絡政策擋住,所以**由頭到尾冇成功攞過一次真實 API 數據**。即係話:
+
+- 下面「運作原理」嘅 API 端點同欄位名(`wait`、`storeStatus`、`storeQueue`),係由開源專案
+  [angus6b23/sushiro-vue](https://github.com/angus6b23/sushiro-vue) 嘅原始碼讀返嚟嘅,**未經實際驗證**,
+  亦唔知官方有冇改過
+- [sushiro-hk-tracker.gosa.app](https://sushiro-hk-tracker.gosa.app/) 呢個網,開發時一直收到 403,
+  **從未真正睇過內容**,所以本專案唔可以聲稱同佢用同一技術
+- 所有開發截圖都係示範或 mock 數據,唔係真實排隊數字
+
+程式邏輯(渲染、追蹤、計時、部署)係實測過嘅;**數據路徑通唔通,要喺香港嘅人開一次先知**。
+
+## 運作原理(基於 sushiro-vue 原始碼,未驗證)
+
+香港壽司郎官方 App 背後係一個叫 **SushiPass** 嘅系統,據該專案所示,佢嘅 REST API 唔使登入就讀到:
 
 | Endpoint | 用途 |
 |---|---|
@@ -73,7 +86,7 @@ node server.js
 ### GitHub Pages(靜態,已設定自動部署)
 
 `.github/workflows/pages.yml` 會自動將 `public/` 部署上 GitHub Pages。因為 Pages 冇 server,
-前端會自動 fallback 用公共 CORS proxy 直連 SushiPass API(同原網站一樣嘅技術):
+前端會自動 fallback 用公共 CORS proxy 直連 SushiPass API(呢啲 proxy 通唔通同樣未驗證):
 
 ```
 同源 /api/stores(有 Node proxy 時)
@@ -94,7 +107,9 @@ cors.freehi.workers.dev → SushiPass
 - Start command: `node server.js`
 - Port 由 `PORT` 環境變數控制(預設 3000)
 
-> ⚠️ SushiPass API 可能會封鎖香港以外嘅 IP:你喺香港用瀏覽器開 Pages 版係經你自己/CF 邊緣節點,一般冇問題;但海外 server host 就可能收 403,建議揀亞洲區。
+> ⚠️ 開發環境 call SushiPass API 一直收到 403,但**分唔清**係官方封鎖地區、定係開發環境自己嘅網絡政策所致。
+> 如果你喺香港開都連唔到,錯誤畫面會列出每個來源嘅失敗原因,可以按住嗰啲訊息再排查
+> (最穩陣嘅做法係自己起一個 Cloudflare Worker 做 proxy,代替公共 CORS proxy)。
 
 ## 聲明
 

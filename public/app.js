@@ -26,13 +26,16 @@
   const expanded = new Set();
   const bookmarks = new Set(JSON.parse(localStorage.getItem('sushiro-bookmarks') || '[]'));
 
-  /* ============ 示範數據(淨係 ?demo=1 先用,唔會當真實數據) ============ */
+  /* ============ 示範數據(淨係 ?demo=1 先用)============
+     店名同地址一律用明顯係假嘅佔位符。之前呢度擺咗真實分店名同地址,
+     但嗰啲地址同座標其實係憑記憶作出嚟、未經核實嘅 —— 用真實店名配作嘅資料,
+     就算收喺 demo 模式後面都唔應該。示範數據就要一眼睇得出係示範。 */
   const DEMO_STORES = [
-    { id: 1001, name: '壽司郎 旺角店', address: '旺角彌敦道 610 號荷李活商業中心', area: '九龍', storeStatus: 'OPEN', wait: 42, latitude: 22.3186, longitude: 114.1707 },
-    { id: 1002, name: '壽司郎 銅鑼灣店', address: '銅鑼灣軒尼詩道 489 號銅鑼灣廣場一期', area: '香港島', storeStatus: 'OPEN', wait: 18, latitude: 22.2803, longitude: 114.1826 },
-    { id: 1003, name: '壽司郎 沙田店', address: '沙田新城市廣場一期', area: '新界', storeStatus: 'OPEN', wait: 7, latitude: 22.3818, longitude: 114.1880 },
-    { id: 1004, name: '壽司郎 荃灣店', address: '荃灣愉景新城', area: '新界', storeStatus: 'CLOSED', wait: 0, latitude: 22.3728, longitude: 114.1178 },
-    { id: 1005, name: '壽司郎 尖沙咀店', address: '尖沙咀彌敦道 132 號美麗華廣場', area: '九龍', storeStatus: 'OPEN', wait: 63, latitude: 22.2986, longitude: 114.1722 },
+    { id: 9001, name: '示範店 A(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'OPEN', wait: 42, latitude: 22.32, longitude: 114.17 },
+    { id: 9002, name: '示範店 B(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'OPEN', wait: 18, latitude: 22.28, longitude: 114.18 },
+    { id: 9003, name: '示範店 C(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'OPEN', wait: 7, latitude: 22.38, longitude: 114.19 },
+    { id: 9004, name: '示範店 D(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'CLOSED', wait: 0, latitude: 22.37, longitude: 114.12 },
+    { id: 9005, name: '示範店 E(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'OPEN', wait: 63, latitude: 22.30, longitude: 114.17 },
   ];
 
   /* ============ 附近 / 定位 ============ */
