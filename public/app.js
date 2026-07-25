@@ -1,8 +1,10 @@
 /* 壽司郎排隊追蹤器 — 前端邏輯 */
 (() => {
-  const REFRESH_MS = 30 * 1000;      // 分店列表更新
-  const TRACK_MS = 15 * 1000;        // 追蹤中籌號更新
-  const STALE_MS = 90 * 1000;        // 超過呢個秒數就當數據過期,要警告用戶
+  // 參考站 sushiro-hk-tracker.gosa.app 用 wire:poll.10s,即係每 10 秒刷新。
+  // 我哋行 15 秒:夠貼近實時,又唔會過份加重官方 API 同公共 proxy 嘅負擔。
+  const REFRESH_MS = 15 * 1000;      // 分店列表更新
+  const TRACK_MS = 12 * 1000;        // 追蹤中籌號更新
+  const STALE_MS = 60 * 1000;        // 超過呢個秒數就當數據過期,要警告用戶
 
   const $ = (id) => document.getElementById(id);
   const $list = $('storeList');
@@ -33,7 +35,7 @@
   // 欄位結構跟足官方真實回應(wait=分鐘、waitingGroup=組數),但值全部係假
   const DEMO_STORES = [
     { id: 9001, name: '示範店 A(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'OPEN', wait: 45, waitingGroup: 56, latitude: 22.32, longitude: 114.17 },
-    { id: 9002, name: '示範店 B(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'OPEN', wait: 20, waitingGroup: 27, latitude: 22.28, longitude: 114.18 },
+    { id: 9002, name: '示範店 B(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'OPEN', wait: 20, waitingGroup: 22, latitude: 22.28, longitude: 114.18 },
     { id: 9003, name: '示範店 C(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'OPEN', wait: 5, waitingGroup: 3, latitude: 22.38, longitude: 114.19 },
     { id: 9004, name: '示範店 D(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'CLOSED', wait: 0, waitingGroup: 0, latitude: 22.37, longitude: 114.12 },
     { id: 9005, name: '示範店 E(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'OPEN', wait: 120, waitingGroup: 60, latitude: 22.30, longitude: 114.17 },
@@ -151,12 +153,18 @@
   }
 
   /* ============ 分店列表 ============
-     官方欄位語意(2026-07-25 由 GitHub runner 實測 44 間分店確認):
-       wait         = 預計等候「分鐘」數,全部係 5 嘅倍數,實測範圍 0~210
-       waitingGroup = 等緊嘅「組」數,實測範圍 0~122
-     例:康城店 wait=210 / waitingGroup=106;黃大仙店 wait=5 / waitingGroup=1。
-     舊版將 wait 標籤成「組等候」,即係將 210 分鐘寫成「210 組」,完全錯。
-     兩個都要如實顯示,並且各自標明單位。 */
+     官方欄位語意 —— 2026-07-25 由 GitHub runner 同時攞官方 API 同參考站
+     sushiro-hk-tracker.gosa.app 渲染頁面,逐間店並排比對確認:
+
+       waitingGroup = 等緊嘅「組」數  ← 參考站顯示嘅就係佢,標籤「X組人等緊」
+       wait         = 預計等候「分鐘」數,全部係 5 嘅倍數(參考站唔顯示)
+
+     14 間店比對結果(gosa 顯示 / 官方 wait / 官方 waitingGroup):
+       旺角店 31組 / 30 / 31      旺角東Moko店 74組 / 60 / 74
+       黃埔時尚坊店 16組 / 35 / 16   樂富店 7組 / 10 / 7
+       上環店 39組 / 35 / 39       黃大仙店 14組 / 15 / 14
+     全部同 waitingGroup 對得上,同 wait 對唔上。
+     所以主要數字用 waitingGroup(組),wait(分鐘)做輔助資訊。 */
   const numOr = (v) => {
     const n = typeof v === 'number' ? v : parseInt(v, 10);
     return Number.isFinite(n) && n >= 0 ? n : null;
@@ -164,13 +172,13 @@
   const groupsOf = (s) => numOr(s.waitingGroup);
   const minutesOf = (s) => numOr(s.wait);
 
-  // 用分鐘數分級:對「而家去唔去好」嚟講,分鐘比組數直接。
+  // 用組數分級,同主要顯示嘅數字一致
   function waitClass(store) {
     if (store.storeStatus !== 'OPEN') return 'wait-closed';
-    const m = minutesOf(store);
-    if (m === null) return groupsOf(store) === null ? 'wait-unknown' : 'wait-mid';
-    if (m >= 45) return 'wait-high';
-    if (m >= 15) return 'wait-mid';
+    const g = groupsOf(store);
+    if (g === null) return minutesOf(store) === null ? 'wait-unknown' : 'wait-mid';
+    if (g >= 30) return 'wait-high';
+    if (g >= 10) return 'wait-mid';
     return 'wait-low';
   }
 
@@ -204,8 +212,8 @@
         if (da !== null && db !== null && da !== db) return da - db;
       }
       if (mode === 'name') return a.name.localeCompare(b.name, 'zh-HK');
-      // 未知等候一律排最後,唔可以當 0 排喺最前扮「最少人」
-      const wa = minutesOf(a), wb = minutesOf(b);
+      // 用組數排,同顯示嘅主要數字一致;未知一律排最後,唔可以當 0 排喺最前扮「最少人」
+      const wa = groupsOf(a), wb = groupsOf(b);
       if (wa === null || wb === null) return (wa === null ? 1 : 0) - (wb === null ? 1 : 0);
       return mode === 'wait-desc' ? wb - wa : wa - wb;
     });
@@ -220,15 +228,14 @@
 
   function renderSummary() {
     // 只用真係有數字嘅分店嚟做統計,唔會將未知當 0 撈落總數
-    const open = stores.filter(s => s.storeStatus === 'OPEN' && minutesOf(s) !== null);
+    const open = stores.filter(s => s.storeStatus === 'OPEN' && groupsOf(s) !== null);
     if (!open.length) { $chips.innerHTML = ''; return; }
-    const fastest = open.reduce((a, b) => (minutesOf(a) <= minutesOf(b) ? a : b));
-    const withGroups = open.filter(s => groupsOf(s) !== null);
-    const totalGroups = withGroups.reduce((n, s) => n + groupsOf(s), 0);
+    const fastest = open.reduce((a, b) => (groupsOf(a) <= groupsOf(b) ? a : b));
+    const totalGroups = open.reduce((n, s) => n + groupsOf(s), 0);
     $chips.innerHTML = `
       <span>營業中 <b>${open.length}</b> 間</span>
-      <span>最快:<b>${escapeHtml(fastest.name)}</b> <b>${escapeHtml(fmtWaitMin(minutesOf(fastest)))}</b></span>
-      ${withGroups.length ? `<span>全港合共 <b>${totalGroups}</b> 組等緊</span>` : ''}`;
+      <span>最快:<b>${escapeHtml(fastest.name)}</b> <b>${groupsOf(fastest)}</b> 組</span>
+      <span>全港合共 <b>${totalGroups}</b> 組等緊</span>`;
   }
 
   function render() {
@@ -322,29 +329,26 @@
     firstRender = false;
   }
 
-  // 徽章大字用「分鐘」(官方 wait),副行補「幾多組」(官方 waitingGroup)。
-  // 兩個都係 API 真實數值,各自標明單位,唔會再將分鐘當組數。
+  // 徽章大字用「組」數(waitingGroup),同參考站 gosa.app 一致;
+  // 官方預計等候時間(wait,分鐘)放副行做輔助。兩個都係 API 真實數值,各自標明單位。
   function badgeNum(store, isOpen) {
     if (!isOpen) return '—';
+    const g = groupsOf(store);
+    if (g !== null) return g;
     const m = minutesOf(store);
-    if (m === null) return groupsOf(store) === null ? '?' : groupsOf(store);
-    if (m === 0) return '0';
-    return m < 60 ? m : (m % 60 === 0 ? `${m / 60}h` : `${Math.floor(m / 60)}h${m % 60}`);
+    return m === null ? '?' : fmtWaitMin(m);
   }
   function badgeUnit(store, isOpen) {
     if (!isOpen) return '休息中';
-    const m = minutesOf(store);
-    if (m === null) return groupsOf(store) === null ? '冇數據' : '組等候';
-    if (m === 0) return '即刻有位';
-    return m < 60 ? '分鐘' : '等候';   // 大字已經係 "3h30",單位再寫「分鐘」就自相矛盾
+    const g = groupsOf(store);
+    if (g === null) return minutesOf(store) === null ? '冇數據' : '預計等候';
+    return g === 0 ? '即刻有位' : '組人等緊';
   }
   function subLine(store, isOpen) {
     if (!isOpen) return '';
-    const g = groupsOf(store), m = minutesOf(store);
-    const parts = [];
-    if (g !== null) parts.push(`<b>${g}</b> 組等緊`);
-    if (m !== null && m > 0) parts.push(`官方估 ${escapeHtml(fmtWaitMin(m))}`);
-    return parts.join(' · ');
+    const m = minutesOf(store);
+    if (m === null) return '';
+    return m === 0 ? '官方:即刻有位' : `官方預計等候 <b>${escapeHtml(fmtWaitMin(m))}</b>`;
   }
 
   function distLabel(store) {
