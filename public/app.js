@@ -1,9 +1,8 @@
 /* 壽司郎排隊追蹤器 — 前端邏輯 */
 (() => {
-  // 參考站 sushiro-hk-tracker.gosa.app 用 wire:poll.10s,即係每 10 秒刷新。
-  // 我哋行 15 秒:夠貼近實時,又唔會過份加重官方 API 同公共 proxy 嘅負擔。
-  const REFRESH_MS = 15 * 1000;      // 分店列表更新
-  const TRACK_MS = 12 * 1000;        // 追蹤中籌號更新
+  // 參考站 sushiro-hk-tracker.gosa.app 用 wire:poll.10s(每 10 秒);我哋行 8 秒。
+  const REFRESH_MS = 8 * 1000;       // 分店列表更新
+  const TRACK_MS = 8 * 1000;         // 追蹤中籌號更新
   const STALE_MS = 60 * 1000;        // 超過呢個秒數就當數據過期,要警告用戶
 
   const $ = (id) => document.getElementById(id);

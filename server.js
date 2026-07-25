@@ -12,9 +12,9 @@ const path = require('path');
 
 const PORT = process.env.PORT || 3000;
 const SUSHIPASS = 'https://sushipass.sushiro.com.hk/api/2.0';
-// 排隊人數變化好快,cache 太耐就唔算實時。15 秒係「唔轟炸官方 API」同
-// 「數字夠新鮮」之間嘅平衡:前端每 30 秒 refresh,最多滯後約 45 秒。
-const CACHE_TTL_MS = 15 * 1000;
+// 同前端 REFRESH_MS 一致,令 cache 唔會成為額外嘅滯後來源。
+// 前端每 8 秒 refresh,cache 8 秒,最壞情況滯後約 16 秒。
+const CACHE_TTL_MS = 8 * 1000;
 
 const cache = new Map(); // url -> { time, data }
 

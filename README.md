@@ -47,7 +47,7 @@ gosa.app 係 Laravel + Livewire 伺服器端渲染,`wire:poll.10s` 每 10 秒刷
 ### 數據路徑
 
 ```
-瀏覽器 ──► /api/stores ──► server.js (cache 15秒) ──► SushiPass API
+瀏覽器 ──► /api/stores ──► server.js (cache 8秒) ──► SushiPass API
 ```
 
 靜態部署(GitHub Pages)冇 server,前端會順序試:
@@ -60,7 +60,7 @@ gosa.app 係 Laravel + Livewire 伺服器端渲染,`wire:poll.10s` 每 10 秒刷
 ### 🎫 我的籌號追蹤 + 到店提醒
 - 撳分店卡嘅「追蹤籌號」,入你張飛個號碼
 - 螢幕底部會有個追蹤 island:顯示而家叫到幾多號、仲差幾多組、進度條、粗略估計時間
-- 每 12 秒自動 check 一次,可以揀「差 3 / 5 / 8 / 12 組時」提醒
+- 每 8 秒自動 check 一次,可以揀「差 3 / 5 / 8 / 12 組時」提醒
 - 提醒方式:瀏覽器通知(Notification API)+ 提示音(WebAudio)+ 震動(手機)+ 分頁標題更新
 - 叫到你個號會再嚟一次「🍣 到你喇!」大通知
 - 追蹤狀態存喺 localStorage,refresh 頁面唔會唔見
@@ -76,7 +76,7 @@ gosa.app 係 Laravel + Livewire 伺服器端渲染,`wire:poll.10s` 每 10 秒刷
 - 頂部 summary:營業中幾多間、邊間最快、全港合共幾多組等緊
 - 分店/地址搜尋、地區篩選、排序;⭐ 書籤置頂常去分店
 - 撳分店卡可以睇到而家叫緊嘅籌號
-- 每 15 秒自動更新(參考站係 10 秒),亦可手動 refresh
+- 每 8 秒自動更新(參考站係 10 秒),亦可手動 refresh
 - 深色玻璃質感 UI + ☀️ 淺色主題(跟系統預設,右上角可以手動切換,揀咗會記住)
 
 ### ⚠️ 數據誠實原則
