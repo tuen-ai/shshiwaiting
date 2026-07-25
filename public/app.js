@@ -94,9 +94,11 @@
   //   corsproxy.io            → HTTP 403「Server-side requests are not allowed on your plan」
   //   api.allorigins.win      → HTTP 500
   // 所以行得通嗰個擺第一,唔好再浪費一個 round trip 喺實測失敗嘅來源。
+  // 名同 URL 綁埋一齊,咁重新排序都唔會同標籤脫節
+  // (之前 SOURCE_NAMES 用數字索引另外寫一次,調換次序之後就報錯來源)
   const CORS_PROXIES = [
-    (u) => `https://cors.freehi.workers.dev/?${u}`,
-    (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
+    { name: 'freehi worker', url: (u) => `https://cors.freehi.workers.dev/?${u}` },
+    { name: 'corsproxy.io', url: (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}` },
   ];
   let apiMode = null; // 'server' | 'direct' | 0 | 1 (proxy index)
 
@@ -111,7 +113,9 @@
     } finally { clearTimeout(timer); }
   }
 
-  const SOURCE_NAMES = { server: '自家 proxy', 0: 'corsproxy.io', 1: 'freehi worker', direct: '官方直連' };
+  const sourceName = (m) =>
+    m === 'server' ? '自家 proxy' : m === 'direct' ? '官方直連'
+      : (typeof m === 'number' && CORS_PROXIES[m]) ? CORS_PROXIES[m].name : '';
 
   async function fetchStoresAny() {
     const errs = [];
@@ -135,7 +139,7 @@
     if (apiMode === null || apiMode === 'direct') {
       try {
         const data = await fetchJson(upstream);
-        if (Array.isArray(data)) { apiMode = 'direct'; return { fetchedAt: Date.now(), stores: data }; }
+        if (Array.isArray(data) && data.length) { apiMode = 'direct'; return { fetchedAt: Date.now(), stores: data }; }
       } catch (e) { errs.push(`直連: ${e.message}`); }
     }
 
@@ -143,10 +147,12 @@
     const order = typeof apiMode === 'number' ? [apiMode, ...CORS_PROXIES.keys()] : [...CORS_PROXIES.keys()];
     for (const i of [...new Set(order)]) {
       try {
-        const data = await fetchJson(CORS_PROXIES[i](upstream));
-        if (Array.isArray(data)) { apiMode = i; return { fetchedAt: Date.now(), stores: data }; }
-        errs.push(`${SOURCE_NAMES[i]}: 回傳唔係分店列表`);
-      } catch (e) { errs.push(`${SOURCE_NAMES[i]}: ${e.message}`); }
+        const data = await fetchJson(CORS_PROXIES[i].url(upstream));
+        // 空陣列都當失敗:上游維護時會回 200 + [],否則畫面會永遠停喺「載入緊…」
+        // 而頂部同時話「啱啱更新」
+        if (Array.isArray(data) && data.length) { apiMode = i; return { fetchedAt: Date.now(), stores: data }; }
+        errs.push(`${CORS_PROXIES[i].name}: ${Array.isArray(data) ? '回傳咗 0 間分店' : '回傳唔係分店列表'}`);
+      } catch (e) { errs.push(`${CORS_PROXIES[i].name}: ${e.message}`); }
     }
     apiMode = null;
     throw new Error(errs.join(' / ') || '所有來源都連唔到');
@@ -227,15 +233,24 @@
   }, { threshold: 0.05 });
 
   function renderSummary() {
-    // 只用真係有數字嘅分店嚟做統計,唔會將未知當 0 撈落總數
-    const open = stores.filter(s => s.storeStatus === 'OPEN' && groupsOf(s) !== null);
-    if (!open.length) { $chips.innerHTML = ''; return; }
-    const fastest = open.reduce((a, b) => (groupsOf(a) <= groupsOf(b) ? a : b));
-    const totalGroups = open.reduce((n, s) => n + groupsOf(s), 0);
-    $chips.innerHTML = `
-      <span>營業中 <b>${open.length}</b> 間</span>
-      <span>最快:<b>${escapeHtml(fastest.name)}</b> <b>${groupsOf(fastest)}</b> 組</span>
-      <span>全港合共 <b>${totalGroups}</b> 組等緊</span>`;
+    // 「營業中幾多間」要數晒所有 OPEN 店;統計數字先至只用有組數嗰啲。
+    // 舊版用同一個 filter,冇 waitingGroup 嘅營業中分店會由間數度消失(少報),
+    // 極端情況全部冇值就成行 chips 清空,用戶以為全港冇店開。
+    const openStores = stores.filter(s => s.storeStatus === 'OPEN');
+    if (!openStores.length) { $chips.innerHTML = ''; return; }
+    const withGroups = openStores.filter(s => groupsOf(s) !== null);
+
+    const chips = [`<span>營業中 <b>${openStores.length}</b> 間</span>`];
+    if (withGroups.length) {
+      const fastest = withGroups.reduce((a, b) => (groupsOf(a) <= groupsOf(b) ? a : b));
+      const totalGroups = withGroups.reduce((n, s) => n + groupsOf(s), 0);
+      chips.push(`<span>最快:<b>${escapeHtml(fastest.name)}</b> <b>${groupsOf(fastest)}</b> 組</span>`);
+      chips.push(`<span>合共 <b>${totalGroups}</b> 組等緊</span>`);
+      if (withGroups.length < openStores.length) {
+        chips.push(`<span>另有 <b>${openStores.length - withGroups.length}</b> 間冇等候數據</span>`);
+      }
+    }
+    $chips.innerHTML = chips.join('');
   }
 
   function render() {
@@ -362,8 +377,12 @@
     const mapLink = Number.isFinite(store.latitude)
       ? `<a class="map-link" href="https://www.google.com/maps/search/?api=1&query=${store.latitude},${store.longitude}" target="_blank" rel="noopener">地圖 ↗</a>`
       : '';
+    // 三種狀態要分清楚:未載入 / 攞唔到 / 真係冇人排。
+    // 舊版將「fetch 失敗(null)」同「空隊列」一齊顯示成「而家冇叫緊嘅籌號」,
+    // 等於用一個網絡錯誤扮咗「零人排隊」。
     if (queue === undefined) panel.innerHTML = `${mapLink}載入籌號中…`;
-    else if (!queue || !queue.length) panel.innerHTML = `${mapLink}而家冇叫緊嘅籌號`;
+    else if (queue === null) panel.innerHTML = `${mapLink}<span class="stale-bad">⚠️ 攞唔到籌號數據</span>`;
+    else if (!queue.length) panel.innerHTML = `${mapLink}而家冇叫緊嘅籌號`;
     else panel.innerHTML = `${mapLink}叫緊嘅籌號:<div class="queue-numbers">${queue.map(n => `<span>${escapeHtml(n)}</span>`).join('')}</div>`;
     panel.querySelector('.map-link')?.addEventListener('click', (e) => e.stopPropagation());
     card.appendChild(panel);
@@ -373,23 +392,58 @@
     if (expanded.has(store.id)) { expanded.delete(store.id); render(); return; }
     expanded.add(store.id);
     render();
-    store._queue = await fetchQueue(store.id, store);
+    try {
+      store._queue = await fetchQueue(store.id, store);
+    } catch {
+      store._queue = null;   // 任何錯誤都要退到「攞唔到」,唔好卡死喺 loading
+    }
     render();
+  }
+
+  /**
+   * 攞一間店而家叫緊嘅籌號。
+   * 回傳:陣列 = 成功(可以係空陣列,代表真係冇人排)
+   *       null = 攞唔到(網絡失敗 / 冇可用來源)—— 呢個唔可以當「冇人排」
+   *
+   * 實測回應有多條隊:storeQueue / storeBoothQueue / storeCounterQueue /
+   * reservationQueue,加上 separateQueue 旗標。
+   * separateQueue=0(實測樣本全部係 0)時 storeQueue 已經包含晒;
+   * 非 0 就代表卡座同櫃檯分開計號,storeQueue 可能係空,要合併返嗰兩條。
+   * reservationQueue 係另一個系列(實測見過 "8120"),唔可以撈埋落現場籌。
+   */
+  function pickQueue(data) {
+    if (!data || typeof data !== 'object') return null;
+    const arr = (v) => (Array.isArray(v) ? v : []);
+    if (data.separateQueue) {
+      const merged = [...arr(data.storeBoothQueue), ...arr(data.storeCounterQueue)];
+      if (merged.length) return merged;
+    }
+    if (arr(data.storeQueue).length) return data.storeQueue;
+    // storeQueue 空:再睇分隊有冇嘢,兩邊都空先當真係冇人排
+    const fallback = [...arr(data.storeBoothQueue), ...arr(data.storeCounterQueue)];
+    return fallback.length ? fallback : [];
   }
 
   async function fetchQueue(storeId, store) {
     if (demoMode) {
       const base = demoAdvance(storeId);
-      return store && waitOf(store) ? [base, base + 3, base + 7] : [];
+      return store && groupsOf(store) ? [base, base + 3, base + 7] : [];
     }
+    const path = `${SUSHIPASS}/remote/groupqueues?region=HK&storeid=${storeId}`;
     try {
       let data;
       if (apiMode === 'server') {
         data = await fetchJson(new URL(`api/queue/${storeId}`, location.href));
+      } else if (apiMode === 'direct') {
+        // 舊版漏咗呢個分支,直連模式下籌號永遠 return null —— 分店列表睇落正常,
+        // 但追蹤永遠停喺「等緊第一次數據…」,用戶以為 app 會提佢
+        data = await fetchJson(path);
       } else if (typeof apiMode === 'number') {
-        data = await fetchJson(CORS_PROXIES[apiMode](`${SUSHIPASS}/remote/groupqueues?region=HK&storeid=${storeId}`));
-      } else return null;
-      return data.storeQueue || [];
+        data = await fetchJson(CORS_PROXIES[apiMode].url(path));
+      } else {
+        return null;
+      }
+      return pickQueue(data);
     } catch { return null; }
   }
 
@@ -416,7 +470,7 @@
     }
     const age = Math.round((Date.now() - dataTime) / 1000);
     const txt = age < 5 ? '啱啱更新' : age < 60 ? `${age} 秒前` : `${Math.floor(age / 60)} 分鐘前`;
-    const src = SOURCE_NAMES[apiMode] || '';
+    const src = sourceName(apiMode);
     $updatedAt.textContent = `${txt}${src ? ' · ' + src : ''}${lastError ? ' · 更新失敗中' : ''}`;
     $updatedAt.className = 'updated' +
       (age * 1000 > STALE_MS * 3 ? ' stale-bad' : age * 1000 > STALE_MS ? ' stale-warn' : '');
@@ -505,11 +559,22 @@
     renderIsland();
   }
 
-  function startTracking(storeId, storeName, ticket, threshold) {
+  // 服務日:以凌晨 4 點做分界(通宵營業嘅店,凌晨 2 點仍然算前一日)。
+  // 籌號每日重置,所以隔咗一個服務日嘅追蹤記錄唔可以照計 —— 舊籌會喺第二日
+  // 俾人「重新叫到」而發出假提醒,叫人白行。
+  function serviceDay(ts = Date.now()) {
+    const d = new Date(ts);
+    d.setHours(d.getHours() - 4);
+    return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  }
+
+  function startTracking(storeId, storeName, ticket, threshold, ticketLabel) {
     tracking = {
       storeId, storeName, ticket, threshold,
+      ticketLabel: ticketLabel || String(ticket),  // 用戶原本打嗰個字串(可以係 "069-2")
+      day: serviceDay(),
       startCalled: null, startAt: null, lastCalled: null,
-      lastPollAt: null, staleSince: null,
+      lastPollAt: null, staleSince: null, closedSince: null,
       notifiedNear: false, notifiedArrived: false,
     };
     saveTracking();
@@ -546,6 +611,26 @@
 
   async function pollTracking() {
     if (!tracking) return;
+
+    // 過咗服務日:籌號已經重置,舊籌唔可以再計。停低等用戶自己決定,
+    // 唔好靜靜繼續 poll 然後喺第二日「重新叫到」而發假提醒。
+    if (tracking.day && tracking.day !== serviceDay()) {
+      tracking.expired = true;
+      clearInterval(trackTimer); trackTimer = null;
+      document.title = '壽司郎排隊追蹤器 🍣';
+      saveTracking(); renderIsland();
+      return;
+    }
+
+    // 間舖收咗工 / 唔喺營業狀態:籌已經冇意義,唔好再倒數或者發提醒
+    const live = stores.find((s) => s.id === tracking.storeId);
+    if (live && live.storeStatus !== 'OPEN') {
+      tracking.closedSince = tracking.closedSince || Date.now();
+      saveTracking(); renderIsland();
+      return;
+    }
+    tracking.closedSince = null;
+
     const called = demoMode
       ? demoAdvance(tracking.storeId)
       : parseCalled(await fetchQueue(tracking.storeId));
@@ -565,17 +650,25 @@
     }
     const remaining = tracking.ticket - called;
 
-    // demo 模式嘅數字係假嘅,唔可以攞嚟叫人出門
+    // demo 模式嘅數字係假嘅,唔可以攞嚟叫人出門 —— 連分頁標題都唔可以扮到咗,
+    // 用戶切咗去第二個 tab 就淨係見到標題,見到「到你喇」一樣會出門
     const mayNotify = !demoMode;
+    if (demoMode) {
+      document.title = '示範模式 — 壽司郎';
+    }
     if (remaining <= 0 && !tracking.notifiedArrived) {
       tracking.notifiedArrived = true;
-      if (mayNotify) notify('🍣 到你喇!', `${tracking.storeName} 已經叫到 ${called} 號,快啲去門口!`);
-      document.title = '🔔 到你喇! — 壽司郎';
+      if (mayNotify) {
+        notify('🍣 到你喇!', `${tracking.storeName} 已經叫到 ${called} 號,快啲去門口!`);
+        document.title = '🔔 到你喇! — 壽司郎';
+      }
     } else if (remaining > 0 && remaining <= tracking.threshold && !tracking.notifiedNear) {
       tracking.notifiedNear = true;
-      if (mayNotify) notify('🚶 好出發喇!', `${tracking.storeName} 仲差 ${remaining} 組就到你(你係 ${tracking.ticket} 號)`);
-      document.title = `仲差 ${remaining} 組 — 壽司郎`;
-    } else if (remaining > 0) {
+      if (mayNotify) {
+        notify('🚶 好出發喇!', `${tracking.storeName} 仲差 ${remaining} 組就到你(你係 ${tracking.ticketLabel || tracking.ticket} 號)`);
+        document.title = `仲差 ${remaining} 組 — 壽司郎`;
+      }
+    } else if (remaining > 0 && mayNotify) {
       document.title = `仲差 ${remaining} 組 — 壽司郎`;
     }
     saveTracking();
@@ -601,9 +694,11 @@
       return;
     }
     const { ticket, storeName, lastCalled, startCalled, threshold } = tracking;
+    const expired = !!tracking.expired;
+    const closed = !expired && !!tracking.closedSince;
     const remaining = lastCalled === null ? null : ticket - lastCalled;
-    const arrived = remaining !== null && remaining <= 0;
-    const near = !arrived && remaining !== null && remaining <= threshold;
+    const arrived = !expired && !closed && remaining !== null && remaining <= 0;
+    const near = !arrived && !expired && !closed && remaining !== null && remaining <= threshold;
 
     let progress = 0;
     if (arrived) progress = 1;
@@ -611,22 +706,29 @@
       progress = Math.max(0.04, Math.min(1, (lastCalled - startCalled) / (ticket - startCalled)));
     }
 
+    const demoTag = demoMode ? '【示範】' : '';
     let statusHtml;
-    if (arrived) {
-      statusHtml = `<div class="tracker-status big">🎉 到你喇!快啲去門口!</div>`;
+    if (expired) {
+      statusHtml = `<div class="tracker-status"><span class="stale-bad">呢個籌係之前一日嘅,籌號已經重置</span> · 撳 ✕ 重新開始</div>`;
+    } else if (closed) {
+      statusHtml = `<div class="tracker-status"><span class="stale-bad">⚠️ ${escapeHtml(storeName)}而家唔喺營業狀態</span> · 呢個籌可能已經失效</div>`;
+    } else if (arrived) {
+      statusHtml = `<div class="tracker-status big">${demoTag}🎉 到你喇!快啲去門口!</div>`;
     } else if (lastCalled === null) {
-      statusHtml = `<div class="tracker-status">等緊第一次數據…</div>`;
+      statusHtml = `<div class="tracker-status">${demoTag}等緊第一次數據…</div>`;
     } else {
       const eta = etaMinutes();
       const stale = tracking.staleSince ? ' · <span class="stale-bad">數據未更新到</span>' : '';
       const tail = near ? ' · 好出發喇 🚶' : (eta !== null ? ` · 照而家速度約 ${eta} 分鐘` : '');
-      statusHtml = `<div class="tracker-status">而家叫到 <b>${lastCalled}</b> · 仲差 <b>${remaining}</b> 組${tail}${stale}</div>`;
+      statusHtml = `<div class="tracker-status">${demoTag}而家叫到 <b>${lastCalled}</b> · 仲差 <b>${remaining}</b> 組${tail}${stale}</div>`;
     }
 
-    $island.className = 'tracker-island' + (arrived ? ' arrived' : near ? ' near' : '');
+    // demo 模式唔可以用「到咗」嘅綠色高亮,假數據唔應該睇落好似真提醒
+    $island.className = 'tracker-island' +
+      (demoMode || expired || closed ? '' : (arrived ? ' arrived' : near ? ' near' : ''));
     $island.innerHTML = `
       <div class="tracker-top">
-        <div class="tracker-num"><div class="label">你嘅籌號</div><div class="val">${escapeHtml(ticket)}</div></div>
+        <div class="tracker-num"><div class="label">你嘅籌號</div><div class="val">${escapeHtml(tracking.ticketLabel || ticket)}</div></div>
         <div class="tracker-mid">
           <div class="tracker-store">${escapeHtml(storeName)}</div>
           ${statusHtml}
@@ -639,10 +741,22 @@
 
   /* ============ Bottom sheet ============ */
   function openSheet(preselectId) {
+    // 用戶撳邊間就一定要包含嗰間,唔可以靜靜跌返第一間 OPEN 店 ——
+    // 否則佢會以為追緊 A 店,實際個 app 對住 B 店倒數,兩邊都錯
     const open = stores.filter(s => s.storeStatus === 'OPEN');
-    const pool = open.length ? open : stores;
+    const pool = open.length ? open.slice() : stores.slice();
+    const preselect = stores.find(s => s.id === preselectId);
+    if (preselect && !pool.some(s => s.id === preselectId)) pool.unshift(preselect);
+
     $('sheetStore').innerHTML = pool
-      .map(s => `<option value="${s.id}" ${s.id === preselectId ? 'selected' : ''}>${escapeHtml(s.name)}(等緊 ${s.wait} 組)</option>`)
+      .map(s => {
+        // 舊版寫 `等緊 ${s.wait} 組` —— s.wait 係分鐘,標籤寫「組」,
+        // 同卡片顯示嘅 waitingGroup 自相矛盾(康城店會寫「等緊 210 組」而實際 106 組)
+        const g = groupsOf(s);
+        const label = g === null ? '未知' : `等緊 ${g} 組`;
+        const closed = s.storeStatus === 'OPEN' ? '' : ' · 非營業中';
+        return `<option value="${s.id}" ${s.id === preselectId ? 'selected' : ''}>${escapeHtml(s.name)}(${label}${closed})</option>`;
+      })
       .join('');
     $('sheetTicket').value = '';
     $backdrop.classList.remove('hidden');
@@ -655,14 +769,17 @@
   $('sheetStart').addEventListener('click', () => {
     const storeId = parseInt($('sheetStore').value, 10);
     const store = stores.find(s => s.id === storeId);
-    const ticket = parseInt($('sheetTicket').value.replace(/\D/g, ''), 10);
-    if (!store || !Number.isFinite(ticket)) {
+    // 輸入端一定要用同隊列一樣嘅 parser。舊版用 replace(/\D/g,''),
+    // 「069-2」會變成 692,而隊列叫到 070 —— 差 622 組,提醒永遠唔會響。
+    const raw = $('sheetTicket').value.trim();
+    const ticket = parseTicket(raw);
+    if (!store || ticket === null) {
       $('sheetTicket').focus();
       $('sheetTicket').placeholder = '請入返個號碼先~';
       return;
     }
     closeSheet();
-    startTracking(store.id, store.name, ticket, parseInt($('sheetThreshold').value, 10));
+    startTracking(store.id, store.name, ticket, parseInt($('sheetThreshold').value, 10), raw);
   });
 
   /* ============ 主題切換 ============ */
@@ -705,10 +822,16 @@
 
   /* ============ 啟動 ============ */
   render();   // 即刻畫「載入中」,唔好對住一片空白
+
+  // 由 localStorage 讀返嚟嘅追蹤記錄,如果唔係今日嘅服務日就直接標記過期,
+  // 唔好 arm timer —— 籌號每日重置,舊籌會俾人「重新叫到」而發假提醒
+  if (tracking && tracking.day && tracking.day !== serviceDay()) {
+    tracking.expired = true;
+    saveTracking();
+  }
   load().then(() => {
     if (tracking) {
-      armTrackTimer();
-      pollTracking();
+      if (!tracking.expired) { armTrackTimer(); pollTracking(); }
       renderIsland();
     }
   });
