@@ -397,6 +397,12 @@ body {
 }
 .status-dot.open { background: var(--green); box-shadow: 0 0 8px rgba(74, 222, 128, 0.8); }
 .status-dot.closed { background: var(--faint); }
+.store-sub {
+  font-size: 0.76rem;
+  color: var(--muted);
+  margin-top: 0.2rem;
+}
+.store-sub b { color: var(--ink); font-variant-numeric: tabular-nums; }
 .store-addr {
   font-size: 0.74rem;
   color: var(--muted);

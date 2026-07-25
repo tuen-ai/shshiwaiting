@@ -30,12 +30,13 @@
      店名同地址一律用明顯係假嘅佔位符。之前呢度擺咗真實分店名同地址,
      但嗰啲地址同座標其實係憑記憶作出嚟、未經核實嘅 —— 用真實店名配作嘅資料,
      就算收喺 demo 模式後面都唔應該。示範數據就要一眼睇得出係示範。 */
+  // 欄位結構跟足官方真實回應(wait=分鐘、waitingGroup=組數),但值全部係假
   const DEMO_STORES = [
-    { id: 9001, name: '示範店 A(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'OPEN', wait: 42, latitude: 22.32, longitude: 114.17 },
-    { id: 9002, name: '示範店 B(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'OPEN', wait: 18, latitude: 22.28, longitude: 114.18 },
-    { id: 9003, name: '示範店 C(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'OPEN', wait: 7, latitude: 22.38, longitude: 114.19 },
-    { id: 9004, name: '示範店 D(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'CLOSED', wait: 0, latitude: 22.37, longitude: 114.12 },
-    { id: 9005, name: '示範店 E(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'OPEN', wait: 63, latitude: 22.30, longitude: 114.17 },
+    { id: 9001, name: '示範店 A(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'OPEN', wait: 45, waitingGroup: 56, latitude: 22.32, longitude: 114.17 },
+    { id: 9002, name: '示範店 B(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'OPEN', wait: 20, waitingGroup: 27, latitude: 22.28, longitude: 114.18 },
+    { id: 9003, name: '示範店 C(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'OPEN', wait: 5, waitingGroup: 3, latitude: 22.38, longitude: 114.19 },
+    { id: 9004, name: '示範店 D(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'CLOSED', wait: 0, waitingGroup: 0, latitude: 22.37, longitude: 114.12 },
+    { id: 9005, name: '示範店 E(假數據)', address: '呢間店唔存在,淨係用嚟睇介面', area: '示範區', storeStatus: 'OPEN', wait: 120, waitingGroup: 60, latitude: 22.30, longitude: 114.17 },
   ];
 
   /* ============ 附近 / 定位 ============ */
@@ -53,8 +54,11 @@
   }
 
   function storeDistance(s) {
-    if (!userPos || !Number.isFinite(s.latitude) || !Number.isFinite(s.longitude)) return null;
-    return haversineKm(userPos.lat, userPos.lng, s.latitude, s.longitude);
+    // 有用戶 GPS 就自己計(官方 distance 係用我哋傳去嘅固定座標計,唔啱用戶位置)
+    if (userPos && Number.isFinite(s.latitude) && Number.isFinite(s.longitude)) {
+      return haversineKm(userPos.lat, userPos.lng, s.latitude, s.longitude);
+    }
+    return null;
   }
 
   function fmtDist(km) {
@@ -83,11 +87,16 @@
      2. CORS proxy 直連 SushiPass — GitHub Pages 等靜態 host 時用
      揀到邊個用邊個,之後停留喺嗰個模式 */
   const SUSHIPASS = 'https://sushipass.sushiro.com.hk/api/2.0';
+  // 2026-07-25 實測(GitHub runner):
+  //   cors.freehi.workers.dev → HTTP 200,38200 bytes ✅
+  //   corsproxy.io            → HTTP 403「Server-side requests are not allowed on your plan」
+  //   api.allorigins.win      → HTTP 500
+  // 所以行得通嗰個擺第一,唔好再浪費一個 round trip 喺實測失敗嘅來源。
   const CORS_PROXIES = [
-    (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
     (u) => `https://cors.freehi.workers.dev/?${u}`,
+    (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
   ];
-  let apiMode = null; // 'server' | 0 | 1 (proxy index)
+  let apiMode = null; // 'server' | 'direct' | 0 | 1 (proxy index)
 
   // 6 秒就放棄轉下一個來源:要試 3 個來源,timeout 太長會令用戶對住空白畫面幾十秒
   async function fetchJson(url, timeoutMs = 6000) {
@@ -104,7 +113,8 @@
 
   async function fetchStoresAny() {
     const errs = [];
-    const upstream = `${SUSHIPASS}/info/storelist?latitude=22.32&longitude=114.17&numresults=25&region=HK`;
+    // numresults 一定要夠大:實測全港有 44 間分店,用 25 會直情少咗 19 間
+    const upstream = `${SUSHIPASS}/info/storelist?latitude=22.32&longitude=114.17&numresults=100&region=HK`;
 
     // 1. 同源 Node proxy(自己 host 時)
     if (apiMode === null || apiMode === 'server') {
@@ -140,21 +150,37 @@
     throw new Error(errs.join(' / ') || '所有來源都連唔到');
   }
 
-  /* ============ 分店列表 ============ */
-  // 官方 API 冇回傳 wait(或者係 null / 字串)嗰陣,一定唔可以當 0 處理 —
-  // 舊版 `undefined >= 30` 係 false,結果未知等候人數會渲染成綠色「好少人等」,誤導性極高。
-  const waitOf = (s) => {
-    const n = typeof s.wait === 'number' ? s.wait : parseInt(s.wait, 10);
+  /* ============ 分店列表 ============
+     官方欄位語意(2026-07-25 由 GitHub runner 實測 44 間分店確認):
+       wait         = 預計等候「分鐘」數,全部係 5 嘅倍數,實測範圍 0~210
+       waitingGroup = 等緊嘅「組」數,實測範圍 0~122
+     例:康城店 wait=210 / waitingGroup=106;黃大仙店 wait=5 / waitingGroup=1。
+     舊版將 wait 標籤成「組等候」,即係將 210 分鐘寫成「210 組」,完全錯。
+     兩個都要如實顯示,並且各自標明單位。 */
+  const numOr = (v) => {
+    const n = typeof v === 'number' ? v : parseInt(v, 10);
     return Number.isFinite(n) && n >= 0 ? n : null;
   };
+  const groupsOf = (s) => numOr(s.waitingGroup);
+  const minutesOf = (s) => numOr(s.wait);
 
+  // 用分鐘數分級:對「而家去唔去好」嚟講,分鐘比組數直接。
   function waitClass(store) {
     if (store.storeStatus !== 'OPEN') return 'wait-closed';
-    const w = waitOf(store);
-    if (w === null) return 'wait-unknown';
-    if (w >= 30) return 'wait-high';
-    if (w >= 10) return 'wait-mid';
+    const m = minutesOf(store);
+    if (m === null) return groupsOf(store) === null ? 'wait-unknown' : 'wait-mid';
+    if (m >= 45) return 'wait-high';
+    if (m >= 15) return 'wait-mid';
     return 'wait-low';
+  }
+
+  // 15 分鐘以上顯示「1 小時 30 分」咁,純分鐘數大過 60 好難即時理解
+  function fmtWaitMin(m) {
+    if (m === null) return null;
+    if (m === 0) return '即刻有位';
+    if (m < 60) return `${m} 分鐘`;
+    const h = Math.floor(m / 60), r = m % 60;
+    return r ? `${h} 小時 ${r} 分` : `${h} 小時`;
   }
 
   function visibleStores() {
@@ -178,8 +204,8 @@
         if (da !== null && db !== null && da !== db) return da - db;
       }
       if (mode === 'name') return a.name.localeCompare(b.name, 'zh-HK');
-      // 未知等候人數一律排最後,唔可以當 0 排喺最前扮「最少人」
-      const wa = waitOf(a), wb = waitOf(b);
+      // 未知等候一律排最後,唔可以當 0 排喺最前扮「最少人」
+      const wa = minutesOf(a), wb = minutesOf(b);
       if (wa === null || wb === null) return (wa === null ? 1 : 0) - (wb === null ? 1 : 0);
       return mode === 'wait-desc' ? wb - wa : wa - wb;
     });
@@ -193,15 +219,16 @@
   }, { threshold: 0.05 });
 
   function renderSummary() {
-    // 只用真係有等候數字嘅分店嚟做統計,唔會將未知當 0 撈落總數
-    const open = stores.filter(s => s.storeStatus === 'OPEN' && waitOf(s) !== null);
+    // 只用真係有數字嘅分店嚟做統計,唔會將未知當 0 撈落總數
+    const open = stores.filter(s => s.storeStatus === 'OPEN' && minutesOf(s) !== null);
     if (!open.length) { $chips.innerHTML = ''; return; }
-    const min = open.reduce((a, b) => (waitOf(a) <= waitOf(b) ? a : b));
-    const total = open.reduce((n, s) => n + waitOf(s), 0);
+    const fastest = open.reduce((a, b) => (minutesOf(a) <= minutesOf(b) ? a : b));
+    const withGroups = open.filter(s => groupsOf(s) !== null);
+    const totalGroups = withGroups.reduce((n, s) => n + groupsOf(s), 0);
     $chips.innerHTML = `
       <span>營業中 <b>${open.length}</b> 間</span>
-      <span>最快:<b>${escapeHtml(min.name.replace(/^壽司郎\s*/, ''))}</b> 等 <b>${waitOf(min)}</b> 組</span>
-      <span>全港合共 <b>${total}</b> 組等緊</span>`;
+      <span>最快:<b>${escapeHtml(fastest.name)}</b> <b>${escapeHtml(fmtWaitMin(minutesOf(fastest)))}</b></span>
+      ${withGroups.length ? `<span>全港合共 <b>${totalGroups}</b> 組等緊</span>` : ''}`;
   }
 
   function render() {
@@ -257,14 +284,15 @@
       card.className = 'store-card' + (expanded.has(store.id) ? ' expanded' : '');
       card.innerHTML = `
         <div class="wait-badge ${waitClass(store)}">
-          <div class="num">${!isOpen ? '—' : (waitOf(store) === null ? '?' : waitOf(store))}</div>
-          <div class="unit">${!isOpen ? '休息中' : (waitOf(store) === null ? '冇數據' : '組等候')}</div>
+          <div class="num">${badgeNum(store, isOpen)}</div>
+          <div class="unit">${badgeUnit(store, isOpen)}</div>
         </div>
         <div class="store-info">
           <div class="store-name">
             <span class="status-dot ${isOpen ? 'open' : 'closed'}"></span>
             <span>${escapeHtml(store.name)}</span>
           </div>
+          <div class="store-sub">${subLine(store, isOpen)}</div>
           <div class="store-addr">${distLabel(store)}${escapeHtml(store.address || '')}</div>
         </div>
         <div class="card-actions">
@@ -292,6 +320,31 @@
       else shell.classList.add('in');
     });
     firstRender = false;
+  }
+
+  // 徽章大字用「分鐘」(官方 wait),副行補「幾多組」(官方 waitingGroup)。
+  // 兩個都係 API 真實數值,各自標明單位,唔會再將分鐘當組數。
+  function badgeNum(store, isOpen) {
+    if (!isOpen) return '—';
+    const m = minutesOf(store);
+    if (m === null) return groupsOf(store) === null ? '?' : groupsOf(store);
+    if (m === 0) return '0';
+    return m < 60 ? m : (m % 60 === 0 ? `${m / 60}h` : `${Math.floor(m / 60)}h${m % 60}`);
+  }
+  function badgeUnit(store, isOpen) {
+    if (!isOpen) return '休息中';
+    const m = minutesOf(store);
+    if (m === null) return groupsOf(store) === null ? '冇數據' : '組等候';
+    if (m === 0) return '即刻有位';
+    return m < 60 ? '分鐘' : '等候';   // 大字已經係 "3h30",單位再寫「分鐘」就自相矛盾
+  }
+  function subLine(store, isOpen) {
+    if (!isOpen) return '';
+    const g = groupsOf(store), m = minutesOf(store);
+    const parts = [];
+    if (g !== null) parts.push(`<b>${g}</b> 組等緊`);
+    if (m !== null && m > 0) parts.push(`官方估 ${escapeHtml(fmtWaitMin(m))}`);
+    return parts.join(' · ');
   }
 
   function distLabel(store) {
@@ -469,9 +522,21 @@
     trackTimer = setInterval(pollTracking, TRACK_MS);
   }
 
+  // 實測籌號係零填充字串,而且會有 "069-1" / "069-2" 咁嘅細分後綴
+  // (旺角東Moko店真實回應:["069-1","069-2","070"])。
+  // 舊版 replace(/\D/g,'') 會將 "069-1" 變成 691,然後即刻誤報「到你喇」。
+  // 正確做法:淨係取第一個 dash 前面嗰段。
+  function parseTicket(v) {
+    const head = String(v).trim().split(/[-–—/]/)[0];
+    const digits = head.replace(/\D/g, '');
+    if (!digits) return null;
+    const n = parseInt(digits, 10);
+    return Number.isFinite(n) ? n : null;
+  }
+
   function parseCalled(queue) {
     if (!queue || !queue.length) return null;
-    const nums = queue.map(v => parseInt(String(v).replace(/\D/g, ''), 10)).filter(Number.isFinite);
+    const nums = queue.map(parseTicket).filter((n) => n !== null);
     return nums.length ? Math.max(...nums) : null;
   }
 

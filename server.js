@@ -76,7 +76,8 @@ const server = http.createServer(async (req, res) => {
     // fetchedAt 係實際由官方 API 攞返嚟嗰刻,唔係而家回應嘅時間 —
     // 咁前端先可以誠實顯示「呢個數字有幾舊」。
     if (url.pathname === '/api/stores') {
-      const upstream = `${SUSHIPASS}/info/storelist?latitude=22.32&longitude=114.17&numresults=25&region=HK`;
+      // 實測全港 44 間分店,numresults 用 25 會少咗 19 間
+      const upstream = `${SUSHIPASS}/info/storelist?latitude=22.32&longitude=114.17&numresults=100&region=HK`;
       const { data, cached } = await fetchWithCache(upstream);
       return sendJson(res, 200, { fetchedAt: cache.get(upstream).time, cached, stores: data });
     }
