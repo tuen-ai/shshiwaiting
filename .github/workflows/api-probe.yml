@@ -1,8 +1,7 @@
 name: API Probe
 
-# 開發環境連唔到 SushiPass API,所以用 GitHub runner 實測:
-#   1. 由非香港嘅資料中心到底通唔通
-#   2. 真實回傳嘅欄位名係乜(唔再靠第三方專案推測)
+# 用 GitHub runner 實測 SushiPass API 嘅真實回應。
+# 開發環境連唔到官方 API,所以任何關於欄位語意嘅嘢都要喺呢度驗證,唔可以靠猜。
 # 呢個 workflow 唔會 fail,淨係如實印出收到嘅嘢。
 
 on:
@@ -15,50 +14,61 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: 出口 IP 同地區
-        run: curl -s --max-time 20 https://ipinfo.io/json || echo "(攞唔到 IP 資訊)"
-
-      - name: storelist 端點
+      - name: 攞 storelist
         run: |
-          URL='https://sushipass.sushiro.com.hk/api/2.0/info/storelist?latitude=22.32&longitude=114.17&numresults=25&region=HK'
-          echo "GET $URL"
-          code=$(curl -s -o /tmp/stores.json -w '%{http_code}' --max-time 30 \
-            -H 'Accept: application/json' \
-            -H 'User-Agent: Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Chrome/120 Mobile' \
-            "$URL" || echo "000")
-          echo "HTTP=$code  bytes=$(wc -c < /tmp/stores.json 2>/dev/null || echo 0)"
-          echo '--- 頭 1200 bytes ---'
-          head -c 1200 /tmp/stores.json || true
-          echo
-          echo '--- 真實欄位名(權威答案)---'
-          FIRST='if type=="array" then .[0] else ((.stores // .data // .storeList // []) | .[0]) end'
-          jq -r "$FIRST | if . == null then \"(攞唔到任何一筆記錄)\" else (keys_unsorted | join(\", \")) end" /tmp/stores.json 2>&1 || echo "(唔係有效 JSON,見上面原始內容)"
-          echo '--- 第一筆記錄 ---'
-          jq -c "$FIRST" /tmp/stores.json 2>/dev/null | head -c 700 || true
-          echo
+          URL='https://sushipass.sushiro.com.hk/api/2.0/info/storelist?latitude=22.32&longitude=114.17&numresults=100&region=HK'
+          code=$(curl -s -o /tmp/s.json -w '%{http_code}' --max-time 30 -H 'Accept: application/json' "$URL" || echo 000)
+          echo "HTTP=$code  bytes=$(wc -c < /tmp/s.json)  店數=$(jq 'length' /tmp/s.json)"
 
-      - name: groupqueues 端點
+      # 關鍵問題:wait 係「組」定係「分鐘」?
+      # 同時有 wait / waitingGroup / waitTimeCap(180)三個欄位,一定要對住實數睇。
+      - name: wait vs waitingGroup 語意
         run: |
-          FIRST='if type=="array" then .[0] else ((.stores // .data // .storeList // []) | .[0]) end'
-          SID=$(jq -r "$FIRST | .id // .storeId // empty" /tmp/stores.json 2>/dev/null)
-          if [ -z "$SID" ]; then echo '冇 store id,跳過(storelist 已經失敗)'; exit 0; fi
-          URL="https://sushipass.sushiro.com.hk/api/2.0/remote/groupqueues?region=HK&storeid=$SID"
-          echo "GET $URL"
-          code=$(curl -s -o /tmp/q.json -w '%{http_code}' --max-time 30 -H 'Accept: application/json' "$URL" || echo "000")
-          echo "HTTP=$code"
-          head -c 800 /tmp/q.json || true
+          echo 'name | status | wait | waitingGroup | wgTable | wgCounter | wgPair | waitShowType | waitTimeCounter | waitTimeCap'
+          jq -r '.[] | [.name, .storeStatus, .wait, .waitingGroup, .waitingGroupTable, .waitingGroupCounter, .waitingGroupPair, .waitShowType, .waitTimeCounter, .waitTimeCap] | @tsv' /tmp/s.json
           echo
-          echo '--- 頂層欄位 ---'
-          jq -r 'keys_unsorted | join(", ")' /tmp/q.json 2>&1 || true
+          echo '--- 統計:wait 同 waitingGroup 嘅關係 ---'
+          jq -r '[.[] | select(.storeStatus=="OPEN")] | "營業中店數: \(length)",
+                 "wait 範圍: \([.[].wait] | min) ~ \([.[].wait] | max)",
+                 "waitingGroup 範圍: \([.[].waitingGroup] | min) ~ \([.[].waitingGroup] | max)",
+                 "wait == waitingGroup 嘅店數: \([.[] | select(.wait == .waitingGroup)] | length)",
+                 "wait 係 waitingGroup 倍數關係樣本: \([.[] | select(.waitingGroup > 0) | {n:.name, w:.wait, g:.waitingGroup, ratio:((.wait / .waitingGroup * 10 | floor) / 10)}][:8] | tostring)"' /tmp/s.json
+
+      - name: 地區 / 名稱 / 距離欄位
+        run: |
+          echo '--- area 嘅實際值(我用嚟做地區篩選)---'
+          jq -r '[.[].area] | unique | join(" / ")' /tmp/s.json
+          echo
+          echo '--- name / nameEn / distance 樣本 ---'
+          jq -r '.[:6][] | "\(.name) | \(.nameEn) | distance=\(.distance) | area=\(.area)"' /tmp/s.json
+          echo
+          echo '--- storeStatus 有幾多種值 ---'
+          jq -r 'group_by(.storeStatus)[] | "\(.[0].storeStatus): \(length) 間"' /tmp/s.json
+          echo
+          echo '--- netTicketStatus 有幾多種值 ---'
+          jq -r 'group_by(.netTicketStatus)[] | "\(.[0].netTicketStatus): \(length) 間"' /tmp/s.json
+
+      # 籌號係 "055" 咁嘅零填充字串,而且分 booth/counter/reservation 幾條隊。
+      # separateQueue 決定咗係咪分開計號 —— 直接影響追蹤邏輯啱唔啱。
+      - name: groupqueues 多間店樣本
+        run: |
+          for SID in $(jq -r '[.[] | select(.storeStatus=="OPEN")][:5][].id' /tmp/s.json); do
+            NAME=$(jq -r --argjson i "$SID" '.[] | select(.id==$i) | .name' /tmp/s.json)
+            W=$(jq -r --argjson i "$SID" '.[] | select(.id==$i) | "wait=\(.wait) waitingGroup=\(.waitingGroup)"' /tmp/s.json)
+            echo "--- [$SID] $NAME  ($W)"
+            curl -s --max-time 20 -H 'Accept: application/json' \
+              "https://sushipass.sushiro.com.hk/api/2.0/remote/groupqueues?region=HK&storeid=$SID" | head -c 400
+            echo
+          done
 
       - name: 公共 CORS proxy 通唔通
         run: |
           TARGET='https://sushipass.sushiro.com.hk/api/2.0/info/storelist?latitude=22.32&longitude=114.17&numresults=25&region=HK'
           ENC=$(printf '%s' "$TARGET" | jq -sRr @uri)
-          for P in "https://corsproxy.io/?url=$ENC" "https://cors.freehi.workers.dev/?$TARGET"; do
-            echo "--- $(printf '%s' "$P" | cut -c1-50)…"
-            curl -s -o /tmp/p.json -w '    HTTP=%{http_code} bytes=%{size_download}
-          ' --max-time 25 "$P" || echo '    (連唔到)'
-            head -c 250 /tmp/p.json 2>/dev/null || true
+          for P in "https://cors.freehi.workers.dev/?$TARGET" "https://corsproxy.io/?url=$ENC" "https://api.allorigins.win/raw?url=$ENC"; do
+            echo "--- $(printf '%s' "$P" | cut -c1-46)…"
+            curl -s -o /tmp/p.json -w '    HTTP=%{http_code} bytes=%{size_download}' --max-time 25 "$P" || echo '    (連唔到)'
+            echo
+            head -c 160 /tmp/p.json 2>/dev/null || true
             echo
           done
