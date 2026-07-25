@@ -1,0 +1,93 @@
+name: Gosa Probe
+
+# 由 runner 深度探測 sushiro-hk-tracker.gosa.app,搞清楚佢真正嘅數據來源。
+# 開發環境去唔到呢個網,所以一切結論都必須喺呢度用真實回應驗證。
+# 唔會 fail,如實印晒收到嘅嘢。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/sushiro-tracker-research-i03r83]
+    paths: ['.github/workflows/gosa-probe.yml']
+
+env:
+  UA: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 首頁 headers 同 HTML
+        run: |
+          B='https://sushiro-hk-tracker.gosa.app'
+          echo '===== response headers ====='
+          curl -sIL --max-time 30 -A "$UA" "$B/" || true
+          echo
+          echo '===== HTML(頭 4000 bytes)====='
+          curl -sL --max-time 30 -A "$UA" "$B/" -o /tmp/index.html || true
+          echo "bytes=$(wc -c < /tmp/index.html 2>/dev/null || echo 0)"
+          head -c 4000 /tmp/index.html || true
+          echo
+
+      - name: 抽出所有 script / link 資源
+        run: |
+          echo '===== script src ====='
+          grep -oE '<script[^>]+src="[^"]+"' /tmp/index.html 2>/dev/null | grep -oE 'src="[^"]+"' | sed 's/src="//;s/"//' | tee /tmp/scripts.txt || true
+          echo
+          echo '===== link href ====='
+          grep -oE '<link[^>]+href="[^"]+"' /tmp/index.html 2>/dev/null | grep -oE 'href="[^"]+"' | sed 's/href="//;s/"//' || true
+          echo
+          echo '===== HTML 入面有冇內嵌 JSON / API 線索 ====='
+          grep -oE '(__NEXT_DATA__|__NUXT__|__SVELTEKIT|window\.__[A-Za-z_]+)' /tmp/index.html 2>/dev/null | sort -u || echo '(冇)'
+          grep -oiE '(sushipass|sushiro\.com\.hk|supabase|firebase|/api/[a-z0-9/_-]*)' /tmp/index.html 2>/dev/null | sort -u | head -30 || echo '(HTML 冇直接線索)'
+
+      - name: 落載每個 JS bundle 搵 API endpoint
+        run: |
+          B='https://sushiro-hk-tracker.gosa.app'
+          i=0
+          : > /tmp/all.js
+          while read -r S; do
+            [ -z "$S" ] && continue
+            case "$S" in
+              http*) U="$S" ;;
+              /*)    U="$B$S" ;;
+              *)     U="$B/$S" ;;
+            esac
+            i=$((i+1))
+            CODE=$(curl -sL --max-time 40 -A "$UA" -o /tmp/b_$i.js -w '%{http_code}' "$U" || echo 000)
+            echo "--- [$CODE] $(wc -c < /tmp/b_$i.js 2>/dev/null || echo 0) bytes  $U"
+            cat /tmp/b_$i.js >> /tmp/all.js 2>/dev/null || true
+          done < /tmp/scripts.txt
+          echo
+          echo "===== 全部 bundle 合共 $(wc -c < /tmp/all.js) bytes ====="
+          echo
+          echo '===== 入面出現嘅 http(s) URL ====='
+          grep -oE 'https?://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]{6,120}' /tmp/all.js 2>/dev/null \
+            | sed 's/[",);]*$//' | sort -u \
+            | grep -viE '(w3\.org|schema\.org|github\.com/|googleapis|gstatic|jsdelivr|unpkg|fonts\.|sentry|vercel\.com|reactjs|npmjs|mozilla|creativecommons|opensource\.org)' \
+            | head -60 || echo '(搵唔到)'
+          echo
+          echo '===== 相對 API 路徑 ====='
+          grep -oE '"/[a-zA-Z0-9._/-]*(api|store|queue|wait|sushi|data)[a-zA-Z0-9._/-]*"' /tmp/all.js 2>/dev/null | sort -u | head -40 || echo '(搵唔到)'
+          echo
+          echo '===== 關鍵字命中 ====='
+          for K in sushipass sushiro.com.hk storelist groupqueues waitingGroup storeQueue supabase firebase; do
+            N=$(grep -oi "$K" /tmp/all.js 2>/dev/null | wc -l)
+            echo "  $K: $N 次"
+          done
+
+      - name: 試常見 API 路徑
+        run: |
+          B='https://sushiro-hk-tracker.gosa.app'
+          for P in /api/stores /api/store /api/shops /api/queue /api/data /api/waiting /api/sushiro \
+                   /data.json /stores.json /api/v1/stores /_next/data; do
+            CODE=$(curl -sL --max-time 20 -A "$UA" -o /tmp/t.json -w '%{http_code}' "$B$P" || echo 000)
+            SIZE=$(wc -c < /tmp/t.json 2>/dev/null || echo 0)
+            printf '  %-22s HTTP=%s  %s bytes' "$P" "$CODE" "$SIZE"
+            if [ "$CODE" = "200" ] && [ "$SIZE" -gt 40 ]; then
+              printf '  <<< 有嘢\n'
+              head -c 400 /tmp/t.json; echo
+            else
+              printf '\n'
+            fi
+          done
