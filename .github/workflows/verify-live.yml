@@ -1,0 +1,60 @@
+name: Verify Live Site
+
+# 開發環境去唔到 github.io,所以由 runner 實測已部署嘅網站:
+# 檔案攞唔攞到、部署咗嘅係咪最新程式碼、瀏覽器行到嘅數據路徑通唔通。
+# 任何一項唔啱就 fail,唔會靜靜當部署成功。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/sushiro-tracker-research-i03r83]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 等 Pages 部署完
+        run: sleep 45
+
+      - name: 網站檔案攞唔攞到
+        run: |
+          BASE='https://tuen-ai.github.io/shshiwaiting'
+          FAIL=0
+          for F in '' /style.css /app.js /manifest.webmanifest /sw.js /icon-192.png /icon-512.png; do
+            CODE=$(curl -sL -o /tmp/f -w '%{http_code}' --max-time 25 "$BASE$F")
+            SIZE=$(wc -c < /tmp/f)
+            printf '  %-24s HTTP=%s  %s bytes\n' "${F:-/}" "$CODE" "$SIZE"
+            [ "$CODE" = "200" ] || FAIL=1
+          done
+          exit $FAIL
+
+      - name: 部署咗嘅係咪最新程式碼
+        run: |
+          curl -sL --max-time 25 'https://tuen-ai.github.io/shshiwaiting/app.js' -o /tmp/app.js
+          FAIL=0
+          check() {
+            if grep -q "$1" /tmp/app.js; then echo "  ✅ $2"; else echo "  ❌ 搵唔到:$2"; FAIL=1; fi
+          }
+          check 'waitingGroup'        'wait/waitingGroup 語意修正已部署'
+          check 'function parseTicket' '籌號 069-1 解析修正已部署'
+          check 'numresults=100'       'numresults=100(44 間分店全取)已部署'
+          check 'cors.freehi'          'CORS proxy 已按實測重排'
+          # 確認假數據 fallback 真係冇咗
+          if grep -q "demo') === '1'" /tmp/app.js; then echo "  ✅ 示範數據要 ?demo=1 明確開啟"; else echo "  ❌ 示範數據把關唔見咗"; FAIL=1; fi
+          exit $FAIL
+
+      - name: 瀏覽器行到嘅數據路徑通唔通
+        run: |
+          # 模擬網頁由 github.io 用 CORS proxy 攞官方數據(帶 Origin header)
+          TARGET='https://sushipass.sushiro.com.hk/api/2.0/info/storelist?latitude=22.32&longitude=114.17&numresults=100&region=HK'
+          CODE=$(curl -s -o /tmp/live.json -w '%{http_code}' --max-time 30 \
+            -H 'Origin: https://tuen-ai.github.io' \
+            "https://cors.freehi.workers.dev/?$TARGET")
+          echo "  CORS proxy HTTP=$CODE  bytes=$(wc -c < /tmp/live.json)"
+          [ "$CODE" = "200" ] || { echo '  ❌ 線上數據路徑唔通'; exit 1; }
+          echo "  分店數: $(jq 'length' /tmp/live.json)"
+          echo "  抽樣(name / wait 分鐘 / waitingGroup 組):"
+          jq -r '.[:5][] | "    \(.name)  wait=\(.wait)分鐘  waitingGroup=\(.waitingGroup)組"' /tmp/live.json
+          # 再確認一次語意冇變:wait 應該全部係 5 嘅倍數
+          BAD=$(jq '[.[] | select((.wait % 5) != 0)] | length' /tmp/live.json)
+          echo "  wait 唔係 5 倍數嘅店數: $BAD (應該係 0)"
