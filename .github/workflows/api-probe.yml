@@ -1,4 +1,4 @@
-name: API Probe (驗證官方 API 真實回應)
+name: API Probe
 
 # 開發環境連唔到 SushiPass API,所以用 GitHub runner 實測:
 #   1. 由非香港嘅資料中心到底通唔通
@@ -30,41 +30,35 @@ jobs:
           echo '--- 頭 1200 bytes ---'
           head -c 1200 /tmp/stores.json || true
           echo
-          echo '--- 第一間店嘅欄位名(呢個先係權威答案)---'
-          python3 -c "
-import json
-d = json.load(open('/tmp/stores.json'))
-items = d if isinstance(d, list) else (d.get('stores') or d.get('data') or [])
-print('回傳型別:', type(d).__name__, '| 店數:', len(items))
-if items:
-    print('欄位:', sorted(items[0].keys()))
-    print('第一筆:', json.dumps(items[0], ensure_ascii=False)[:600])
-" 2>&1 || echo "(唔係有效 JSON — 見上面原始內容)"
+          echo '--- 真實欄位名(權威答案)---'
+          FIRST='if type=="array" then .[0] else ((.stores // .data // .storeList // []) | .[0]) end'
+          jq -r "$FIRST | if . == null then \"(攞唔到任何一筆記錄)\" else (keys_unsorted | join(\", \")) end" /tmp/stores.json 2>&1 || echo "(唔係有效 JSON,見上面原始內容)"
+          echo '--- 第一筆記錄 ---'
+          jq -c "$FIRST" /tmp/stores.json 2>/dev/null | head -c 700 || true
+          echo
 
       - name: groupqueues 端點
         run: |
-          SID=$(python3 -c "
-import json
-try:
-    d = json.load(open('/tmp/stores.json'))
-    items = d if isinstance(d, list) else (d.get('stores') or [])
-    print(items[0].get('id',''))
-except Exception:
-    print('')
-" 2>/dev/null)
+          FIRST='if type=="array" then .[0] else ((.stores // .data // .storeList // []) | .[0]) end'
+          SID=$(jq -r "$FIRST | .id // .storeId // empty" /tmp/stores.json 2>/dev/null)
           if [ -z "$SID" ]; then echo '冇 store id,跳過(storelist 已經失敗)'; exit 0; fi
           URL="https://sushipass.sushiro.com.hk/api/2.0/remote/groupqueues?region=HK&storeid=$SID"
           echo "GET $URL"
           code=$(curl -s -o /tmp/q.json -w '%{http_code}' --max-time 30 -H 'Accept: application/json' "$URL" || echo "000")
           echo "HTTP=$code"
           head -c 800 /tmp/q.json || true
+          echo
+          echo '--- 頂層欄位 ---'
+          jq -r 'keys_unsorted | join(", ")' /tmp/q.json 2>&1 || true
 
       - name: 公共 CORS proxy 通唔通
         run: |
           TARGET='https://sushipass.sushiro.com.hk/api/2.0/info/storelist?latitude=22.32&longitude=114.17&numresults=25&region=HK'
-          for P in "https://corsproxy.io/?url=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=''))" "$TARGET")" \
-                   "https://cors.freehi.workers.dev/?$TARGET"; do
-            echo "--- $(echo "$P" | cut -c1-45)…"
-            curl -s -o /tmp/p.json -w '    HTTP=%{http_code} bytes=%{size_download}\n' --max-time 25 "$P" || echo '    (連唔到)'
-            head -c 200 /tmp/p.json 2>/dev/null; echo
+          ENC=$(printf '%s' "$TARGET" | jq -sRr @uri)
+          for P in "https://corsproxy.io/?url=$ENC" "https://cors.freehi.workers.dev/?$TARGET"; do
+            echo "--- $(printf '%s' "$P" | cut -c1-50)…"
+            curl -s -o /tmp/p.json -w '    HTTP=%{http_code} bytes=%{size_download}
+          ' --max-time 25 "$P" || echo '    (連唔到)'
+            head -c 250 /tmp/p.json 2>/dev/null || true
+            echo
           done
